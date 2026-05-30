@@ -1,0 +1,1503 @@
+/* ============================================================
+   app.js — 7步工作流引擎 + 全部UI
+   ============================================================ */
+
+const App = {
+  // ====================== 状态 ======================
+  state: {
+    step: 1,
+    // 步骤1：选题
+    topics: [],
+    selectedTopic: null,
+    inspiration: '',
+    // 步骤2：识图
+    images: [],
+    imageDesc: '',
+    // 步骤3：正文
+    article: '',
+    generatingArticle: false,
+    // 步骤4：修改
+    articleEdited: '',
+    // 步骤5：标题
+    titles: [],
+    selectedTitle: '',
+    // 步骤6：配图
+    imagePrompts: [],
+    // 步骤7：导出
+    finalOutput: ''
+  },
+
+  STEPS: [
+    { n: 1, icon: '📋', label: '选题' },
+    { n: 2, icon: '📷', label: '识图' },
+    { n: 3, icon: '✍️', label: '正文' },
+    { n: 4, icon: '🔧', label: '修改' },
+    { n: 5, icon: '🏷️', label: '标题' },
+    { n: 6, icon: '🎨', label: '配图' },
+    { n: 7, icon: '📥', label: '导出' }
+  ],
+
+  // ====================== 初始化 ======================
+  init() {
+    this.render();
+    this.bindEvents();
+    this.renderStep();
+    this.loadInspirationDraft();
+    this.loadDraft(); // 恢复上一次的工作进度
+  },
+
+  // ====================== UI 骨架 ======================
+  render() {
+    const root = document.getElementById('app');
+    root.innerHTML = `
+      <!-- 顶部 Header -->
+      <header class="header">
+        <div class="header-top">
+          <h1>🏺 老郭说宝</h1>
+          <span class="header-badge">文章创作工作台</span>
+          <button class="btn btn-sm btn-secondary" onclick="App.toggleSettings(event)" style="margin-left:auto;" title="API 设置">⚙️</button>
+        </div>
+        <p class="subtitle">专注建水紫陶 · 7步出文 · AI驱动选题</p>
+      </header>
+
+      <!-- 状态消息 -->
+      <div id="statusMessage" class="status hidden"></div>
+
+      <!-- 步骤条 -->
+      <nav class="step-bar" id="stepBar"></nav>
+
+      <!-- 主内容区 -->
+      <main class="main-content" id="mainContent"></main>
+
+      <!-- 底部栏 -->
+      <footer class="step-footer" id="stepFooter">
+        <button class="btn btn-secondary" id="btnPrev" onclick="App.prevStep()">← 上一步</button>
+        <span class="step-hint" id="stepHint"></span>
+        <button class="btn btn-primary" id="btnNext" onclick="App.nextStep()">下一步 →</button>
+      </footer>
+
+      <!-- 设置面板（浮层） -->
+      <div id="settingsPanel" class="settings-overlay hidden" onclick="App.toggleSettings(event)">
+        <div class="settings-drawer" onclick="event.stopPropagation()">
+          <div class="settings-header">
+            <h2>⚙️ API 设置</h2>
+            <button class="btn-close" onclick="App.toggleSettings()">✕</button>
+          </div>
+          <div class="settings-body" id="settingsBody"></div>
+        </div>
+      </div>
+
+      <!-- 导出预览模态框 -->
+      <div id="exportModal" class="modal hidden">
+        <div class="modal-overlay" onclick="App.closeModal('exportModal')"></div>
+        <div class="modal-content modal-large">
+          <div class="modal-header">
+            <h2>📝 文章预览</h2>
+            <button class="modal-close" onclick="App.closeModal('exportModal')">✕</button>
+          </div>
+          <div class="modal-body" id="exportBody"></div>
+          <div class="modal-footer">
+            <button class="btn btn-success" onclick="App.downloadMarkdown()">📥 下载 .md 文件</button>
+            <button class="btn btn-secondary" onclick="App.copyArticle()">📋 复制全文</button>
+            <button class="btn btn-secondary" onclick="App.closeModal('exportModal')">关闭</button>
+          </div>
+        </div>
+      </div>
+    `;
+  },
+
+  // ====================== 步骤条渲染 ======================
+  renderStepBar() {
+    const bar = document.getElementById('stepBar');
+    bar.innerHTML = this.STEPS.map(s => {
+      const isActive = s.n === this.state.step;
+      const isDone = s.n < this.state.step;
+      return `
+        <div class="step-item ${isActive ? 'active' : ''} ${isDone ? 'done' : ''}"
+             onclick="${isDone ? `App.goToStep(${s.n})` : ''}"
+             title="${isDone ? '点击返回' : ''}">
+          <div class="step-circle">${isDone ? '✓' : s.icon}</div>
+          <div class="step-label">${s.label}</div>
+        </div>
+        ${s.n < 7 ? '<div class="step-connector ' + (isDone ? 'done' : '') + '"></div>' : ''}
+      `;
+    }).join('');
+  },
+
+  // ====================== 步骤导航 ======================
+  goToStep(n) {
+    if (n < 1 || n > 7) return;
+    // 回退允许，前进需要验证
+    if (n > this.state.step && !this.canProceed()) return;
+    this.state.step = n;
+    this.renderStepBar();
+    this.renderStep();
+    this.updateFooter();
+    // 滚动到顶部
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  },
+
+  nextStep() {
+    if (!this.canProceed()) return;
+    if (this.state.step < 7) {
+      this.goToStep(this.state.step + 1);
+    } else {
+      // 第7步"完成"：保存历史 + 回到首页
+      this.saveToHistory();
+      this.state.step = 1;
+      // 保留已选的选题和灵感，方便继续写下一篇
+      // 但清空文章正文、标题、配图等
+      this.state.article = '';
+      this.state.articleEdited = '';
+      this.state.imageDesc = '';
+      this.state.titles = [];
+      this.state.selectedTitle = '';
+      this.state.imagePrompts = [];
+      this.state.finalOutput = '';
+      this.renderStepBar();
+      this.renderStep();
+      this.updateFooter();
+      this.showStatus('✅ 文章已保存到历史记录', 'success');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  },
+
+  prevStep() {
+    if (this.state.step > 1) {
+      this.goToStep(this.state.step - 1);
+    }
+  },
+
+  canProceed() {
+    // 各步骤的完成验证
+    switch (this.state.step) {
+      case 1: return !!this.state.selectedTopic || !!this.state.inspiration.trim();
+      case 2: return true; // 识图可选
+      case 3: return !!this.state.article && !this.state.generatingArticle;
+      case 4: return !!this.state.articleEdited.trim();
+      case 5: return !!this.state.selectedTitle;
+      case 6: return this.state.imagePrompts.length > 0;
+      case 7: return true;
+      default: return false;
+    }
+  },
+
+  updateFooter() {
+    const btnNext = document.getElementById('btnNext');
+    const btnPrev = document.getElementById('btnPrev');
+    const hint = document.getElementById('stepHint');
+
+    btnPrev.style.visibility = this.state.step === 1 ? 'hidden' : 'visible';
+
+    if (this.state.step === 7) {
+      btnNext.textContent = '🎉 完成';
+      btnNext.className = 'btn btn-success';
+    } else {
+      btnNext.textContent = '下一步 →';
+      btnNext.className = 'btn btn-primary';
+    }
+
+    btnNext.disabled = !this.canProceed();
+
+    // 状态提示
+    const hints = {
+      1: '选择一个选题或输入灵感',
+      2: '可跳过，直接下一步',
+      3: '点击"生成正文"让 AI 写稿',
+      4: '编辑修改正文，满意后下一步',
+      5: '生成标题方案，选定一个',
+      6: '生成配图提示词',
+      7: '预览完整文章，下载 .md'
+    };
+    hint.textContent = hints[this.state.step] || '';
+  },
+
+  // ====================== 步骤渲染 ======================
+  renderStep() {
+    const map = {
+      1: () => this.renderStep1(),
+      2: () => this.renderStep2(),
+      3: () => this.renderStep3(),
+      4: () => this.renderStep4(),
+      5: () => this.renderStep5(),
+      6: () => this.renderStep6(),
+      7: () => this.renderStep7()
+    };
+    (map[this.state.step] || (() => {}))();
+    this.updateFooter();
+  },
+
+  // ---------- 步骤1：选题 ----------
+  renderStep1() {
+    const el = document.getElementById('mainContent');
+    el.innerHTML = `
+      <div class="step-panel">
+        <div class="step-header">
+          <h2>📋 第一步：选题</h2>
+          <p class="step-desc">点选题直接选，或自己输入灵感。不满意就「换一批」，AI 重新给你策划。</p>
+        </div>
+
+        <div class="topic-actions">
+          <button class="btn btn-primary" onclick="App.recommendTopics()" id="btnRecommend">
+            🤖 AI 推荐选题
+          </button>
+          <button class="btn btn-secondary" onclick="App.refreshTopics()" id="btnRefresh" style="display:none;">
+            🔄 换一批
+          </button>
+          <div class="topic-filter" id="topicFilter">
+            <button class="filter-btn active" data-cat="all" onclick="App.filterTopics('all')">全部</button>
+            <button class="filter-btn" data-cat="knowledge" onclick="App.filterTopics('knowledge')">📚 知识</button>
+            <button class="filter-btn" data-cat="appreciation" onclick="App.filterTopics('appreciation')">🎨 赏析</button>
+            <button class="filter-btn" data-cat="market" onclick="App.filterTopics('market')">📈 市场</button>
+          </div>
+        </div>
+
+        <div id="topicLoading" class="topic-loading hidden">
+          <div class="spinner"></div>
+          <p id="topicLoadingText">🧠 AI 正在策划选题...</p>
+        </div>
+
+        <div id="topicGrid" class="topic-grid"></div>
+
+        <div class="divider"><span>或者自己写灵感</span></div>
+
+        <textarea id="inspirationInput"
+          class="inspiration-input"
+          placeholder="比如：最近收到一把普忠华的柴烧壶，工笔花鸟特别精细，想写写柴烧的不确定性之美..."
+          oninput="App.state.inspiration=this.value;App.saveInspirationDraft();App.updateFooter()"
+        >${this.state.inspiration}</textarea>
+
+        <div class="selected-badge" id="selectedBadge" style="display:${this.state.selectedTopic ? 'flex' : 'none'}">
+          📌 已选：<span id="selectedTopicText">${this.state.selectedTopic || ''}</span>
+          <button class="btn-sm-text" onclick="App.clearSelectedTopic()">取消</button>
+        </div>
+
+        <!-- 历史记录 -->
+        <div class="divider"><span>📜 历史文章</span></div>
+        <div id="historyList" class="history-list"></div>
+      </div>
+    `;
+    // 从 localStorage 恢复之前的选题
+    if (this.state.topics.length === 0) {
+      this.loadTopicsFromStorage();
+    }
+    if (this.state.topics.length > 0) {
+      this.renderTopics(this.state.topics);
+      document.getElementById('btnRefresh').style.display = 'inline-flex';
+    } else {
+      // 首次进入：显示引导，不自动调 API（等用户点击"AI推荐"）
+      document.getElementById('topicGrid').innerHTML = `
+        <div class="topic-welcome">
+          <p>👋 首次使用？先点「AI 推荐选题」让 AI 给你策划，</p>
+          <p>或者直接在下方的输入框里写你的灵感。</p>
+          <p style="font-size:0.85em;color:var(--text-light);margin-top:8px;">
+            ⚙️ 首次使用记得去右上角设置 API Key
+          </p>
+        </div>
+      `;
+    }
+    this.renderHistory();
+  },
+
+  async recommendTopics() {
+    this.showTopicLoading('🧠 AI 正在策划选题...');
+    try {
+      const topics = await Topics.recommend((chunk) => {
+        if (chunk.includes('策划')) return;
+        this.setTopicLoadingText(chunk);
+      });
+      this.state.topics = topics;
+      this.renderTopics(topics);
+      this.saveTopicsToStorage(); // 存到本地，下次打开还在
+      document.getElementById('btnRefresh').style.display = 'inline-flex';
+      this.hideTopicLoading();
+    } catch (err) {
+      this.hideTopicLoading();
+      const msg = err.message;
+      if (msg.includes('未配置')) {
+        this.showStatus('❌ ' + msg + ' → 点右上角 ⚙️ 填入 API Key', 'error');
+      } else if (msg.includes('401') || msg.includes('Incorrect API key')) {
+        this.showStatus('❌ API Key 无效，请去 ⚙️ 设置中检查', 'error');
+      } else if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+        this.showStatus('❌ 网络不通，检查 API 地址或网络连接', 'error');
+      } else {
+        this.showStatus('❌ 选题推荐失败：' + msg, 'error');
+      }
+    }
+  },
+
+  async refreshTopics() {
+    this.showTopicLoading('🔄 AI 正在想新的角度...');
+    try {
+      // 带上已选的作为"不要重复"的 hint
+      const topics = await Topics.recommend();
+      this.state.topics = topics;
+      this.renderTopics(topics);
+      this.saveTopicsToStorage();
+      this.hideTopicLoading();
+      this.showStatus('✅ 新一批选题已就绪', 'success');
+    } catch (err) {
+      this.hideTopicLoading();
+      const msg = err.message;
+      if (msg.includes('未配置')) {
+        this.showStatus('❌ ' + msg + ' → 点右上角 ⚙️ 设置', 'error');
+      } else {
+        this.showStatus('❌ 换一批失败：' + msg, 'error');
+      }
+    }
+  },
+
+  renderTopics(topics) {
+    if (!topics || topics.length === 0) {
+      document.getElementById('topicGrid').innerHTML = '<p class="text-light">暂无推荐，点"AI 推荐选题"试试</p>';
+      return;
+    }
+    const currentFilter = document.querySelector('.filter-btn.active')?.dataset.cat || 'all';
+    const container = document.getElementById('topicGrid');
+    container.innerHTML = topics.map((t, i) => `
+      <div class="topic-card ${this.state.selectedTopic === t.title ? 'selected' : ''}"
+           data-cat="${t.category}"
+           onclick="App.selectTopic(${i})"
+           style="${currentFilter !== 'all' && t.category !== currentFilter ? 'display:none' : ''}">
+        <div class="topic-card-top">
+          <span class="topic-title">${t.title}</span>
+          <span class="topic-priority" style="color:${Topics.priorityColor(t.priority)}">${t.priority || ''}</span>
+        </div>
+        <p class="topic-reason">${t.reason || ''}</p>
+        <div class="topic-card-tags">
+          <span class="tag category-${t.category}">${Topics.categoryLabel(t.category)}</span>
+          ${t.angle ? `<span class="tag">🎯 ${t.angle}</span>` : ''}
+        </div>
+      </div>
+    `).join('');
+  },
+
+  filterTopics(cat) {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.toggle('active', b.dataset.cat === cat));
+    document.querySelectorAll('.topic-card').forEach(card => {
+      card.style.display = (cat === 'all' || card.dataset.cat === cat) ? 'block' : 'none';
+    });
+  },
+
+  selectTopic(index) {
+    const topic = this.state.topics[index];
+    this.state.selectedTopic = topic.title;
+    this.state.inspiration = ''; // 清空灵感
+    document.getElementById('inspirationInput').value = '';
+    // 更新 UI
+    document.querySelectorAll('.topic-card').forEach(c => c.classList.remove('selected'));
+    document.querySelectorAll('.topic-card')[index]?.classList.add('selected');
+    document.getElementById('selectedBadge').style.display = 'flex';
+    document.getElementById('selectedTopicText').textContent = topic.title;
+    // 从保存的选题列表中移除已选的（下次打开不再出现）
+    this.state.topics.splice(index, 1);
+    this.saveTopicsToStorage();
+    this.renderTopics(this.state.topics);
+    this.saveInspirationDraft();
+    this.updateFooter();
+  },
+
+  clearSelectedTopic() {
+    this.state.selectedTopic = null;
+    document.querySelectorAll('.topic-card').forEach(c => c.classList.remove('selected'));
+    document.getElementById('selectedBadge').style.display = 'none';
+    this.updateFooter();
+  },
+
+  showTopicLoading(text) {
+    document.getElementById('topicLoading').classList.remove('hidden');
+    document.getElementById('topicLoadingText').textContent = text || '🧠 AI 正在策划选题...';
+    document.getElementById('btnRecommend').disabled = true;
+  },
+
+  setTopicLoadingText(text) {
+    const el = document.getElementById('topicLoadingText');
+    if (el && text) el.textContent = text;
+  },
+
+  hideTopicLoading() {
+    document.getElementById('topicLoading').classList.add('hidden');
+    document.getElementById('btnRecommend').disabled = false;
+  },
+
+  // ---------- 步骤2：识图 ----------
+  renderStep2() {
+    const el = document.getElementById('mainContent');
+    const hasImages = this.state.images.length > 0;
+    el.innerHTML = `
+      <div class="step-panel">
+        <div class="step-header">
+          <h2>📷 第二步：识图（可选）</h2>
+          <p class="step-desc">有器物照片可以上传描述，也可以直接下一步跳过。</p>
+        </div>
+
+        <div id="visionDropZone" class="vision-dropzone"
+             ondragover="event.preventDefault();this.classList.add('drag-over')"
+             ondragleave="this.classList.remove('drag-over')"
+             ondrop="App.handleImageDrop(event)">
+          <div class="vision-dropzone-inner">
+            <span class="vision-icon">📷</span>
+            <p>拖拽图片到这里，或</p>
+            <button type="button" class="btn btn-secondary" onclick="document.getElementById('visionInput').click()">
+              选择图片
+            </button>
+            <p class="text-light" style="font-size:0.82em;margin-top:4px">支持 JPG/PNG，最多3张</p>
+          </div>
+          <input type="file" id="visionInput" accept="image/*" multiple style="display:none"
+                 onchange="App.handleImageFiles(this.files)">
+        </div>
+
+        <div id="visionPreview" class="vision-preview-list"></div>
+
+        <div id="visionActions" style="display:${hasImages ? 'flex' : 'none'};gap:8px;flex-wrap:wrap;margin-top:12px">
+          <button class="btn btn-primary" onclick="App.doVision()" id="btnVision">
+            🔍 开始识图
+          </button>
+          <button class="btn btn-secondary" onclick="App.clearImages()">
+            🗑️ 清空图片
+          </button>
+        </div>
+
+        <div id="visionResult" class="vision-result ${this.state.imageDesc ? '' : 'hidden'}">
+          <h3>📝 识别结果</h3>
+          <div class="vision-result-content">${this.markdownToHtml(Vision.cleanResponse(this.state.imageDesc))}</div>
+          <button class="btn btn-sm btn-secondary" onclick="App.editVisionResult()">✏️ 编辑</button>
+        </div>
+
+        <div id="visionLoading" class="topic-loading hidden">
+          <div class="spinner"></div>
+          <p id="visionLoadingText">正在识别图片...</p>
+        </div>
+      </div>
+    `;
+    this.renderVisionPreviews();
+  },
+
+  handleImageFiles(files) {
+    const remaining = 3 - this.state.images.length;
+    if (remaining <= 0) {
+      this.showStatus('最多3张图片', 'warning');
+      return;
+    }
+    const toAdd = Array.from(files).filter(f => f.type.startsWith('image/')).slice(0, remaining);
+    if (toAdd.length === 0) return;
+
+    Promise.all(toAdd.map(f => Vision.processFiles([f]))).then(results => {
+      results.flat().forEach(url => {
+        if (this.state.images.length < 3) this.state.images.push(url);
+      });
+      this.renderStep2(); // 重渲染
+    });
+  },
+
+  handleImageDrop(e) {
+    e.preventDefault();
+    e.currentTarget.classList.remove('drag-over');
+    this.handleImageFiles(e.dataTransfer.files);
+  },
+
+  renderVisionPreviews() {
+    const container = document.getElementById('visionPreview');
+    if (!container) return;
+    container.innerHTML = this.state.images.map((src, i) => `
+      <div class="vision-preview-item">
+        <img src="${src}" alt="图片${i + 1}">
+        <button class="remove-btn" onclick="App.removeImage(${i})">×</button>
+      </div>
+    `).join('');
+  },
+
+  removeImage(index) {
+    this.state.images.splice(index, 1);
+    this.renderStep2();
+  },
+
+  clearImages() {
+    this.state.images = [];
+    this.state.imageDesc = '';
+    this.renderStep2();
+  },
+
+  async doVision() {
+    if (this.state.images.length === 0) {
+      this.showStatus('请先上传图片', 'error');
+      return;
+    }
+    document.getElementById('visionLoading').classList.remove('hidden');
+    document.getElementById('btnVision').disabled = true;
+    try {
+      const desc = await Vision.recognize(this.state.images, (msg) => {
+        document.getElementById('visionLoadingText').textContent = msg || '正在识别图片...';
+      });
+      // 不管 vision.js 里洗没洗干净，这里再杀一轮
+      this.state.imageDesc = Vision.cleanResponse(desc);
+      this.renderStep2();
+    } catch (err) {
+      // 识图失败→显示手动输入
+      document.getElementById('visionLoading').classList.add('hidden');
+      document.getElementById('btnVision').disabled = false;
+      const desc = document.querySelector('.vision-result');
+      if (desc) {
+        desc.classList.remove('hidden');
+        desc.innerHTML = `
+          <h3>✏️ 手动描述器物</h3>
+          <p style="color:var(--text-secondary);font-size:0.85em;margin-bottom:8px">
+            ⚠️ 本地识图暂时不可用，简单写下你看到什么就行：
+          </p>
+          <textarea class="feedback-input" id="manualVisionDesc"
+            placeholder="例如：这是一把柴烧侧把壶，壶身有火皮痕迹，刻了山水"
+            style="min-height:100px"></textarea>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn btn-primary btn-sm"
+              onclick="App.state.imageDesc=document.getElementById('manualVisionDesc').value;App.renderStep2();App.showStatus('✅ 描述已保存','success');App.updateFooter()">
+              确认
+            </button>
+            <button class="btn btn-secondary btn-sm" onclick="App.renderStep2()">
+              取消，重传图片
+            </button>
+          </div>
+        `;
+      }
+      if (msg.includes('代理') || msg.includes('Failed to fetch')) {
+        this.showStatus('⚠️ 代理没启动 → 终端: python3 proxy/vision_proxy.py', 'warning');
+      } else if (msg.includes('未配置')) {
+        this.showStatus('❌ ' + msg + ' → 点右上角 ⚙️ 设置', 'error');
+      }
+    } finally {
+      document.getElementById('visionLoading').classList.add('hidden');
+      document.getElementById('btnVision').disabled = false;
+    }
+  },
+
+  editVisionResult() {
+    const el = document.querySelector('.vision-result-content');
+    if (!el) return;
+    const textarea = document.createElement('textarea');
+    textarea.className = 'vision-edit-area';
+    textarea.value = this.state.imageDesc;
+    textarea.onblur = () => {
+      this.state.imageDesc = textarea.value;
+      this.renderStep2();
+    };
+    el.parentNode.replaceChild(textarea, el);
+    textarea.focus();
+  },
+
+  // ---------- 步骤3：生成正文 ----------
+  renderStep3() {
+    const el = document.getElementById('mainContent');
+    const hasArticle = !!this.state.article;
+    el.innerHTML = `
+      <div class="step-panel">
+        <div class="step-header">
+          <h2>✍️ 第三步：生成正文</h2>
+          <p class="step-desc">AI 根据选题 + 识图结果 + 风格指南，直接给你写一篇。</p>
+        </div>
+
+        <div id="genConfig" class="gen-config">
+          <div class="gen-config-item">
+            <label>文章分类</label>
+            <select id="articleCategory" onchange="App.saveCategory()">
+              <option value="knowledge">📚 知识科普</option>
+              <option value="appreciation">🎨 器物赏析</option>
+              <option value="market">📈 市场观察</option>
+            </select>
+          </div>
+          <div class="gen-config-item">
+            <label>字数</label>
+            <select id="articleLength">
+              <option value="short">精简（500字）</option>
+              <option value="medium" selected>标准（800-1000字）</option>
+              <option value="long">详细（1200-1500字）</option>
+            </select>
+          </div>
+        </div>
+
+        <button class="btn btn-primary btn-lg" onclick="App.generateArticle()" id="btnGenerate" ${hasArticle ? '' : ''}>
+          ✨ 生成正文
+        </button>
+
+        <div id="genLoading" class="topic-loading hidden">
+          <div class="spinner"></div>
+          <p>✍️ AI 正在写文章...</p>
+        </div>
+
+        <div id="articleDisplay" class="article-display ${hasArticle ? '' : 'hidden'}">
+          ${hasArticle ? this.markdownToHtml(this.state.article) : ''}
+        </div>
+      </div>
+    `;
+  },
+
+  saveCategory() {
+    // 在生成时使用即可
+  },
+
+  buildArticlePrompt() {
+    const topic = this.state.selectedTopic || '建水紫陶';
+    const inspiration = this.state.inspiration || '';
+    const imageDesc = this.state.imageDesc || '';
+    const category = document.getElementById('articleCategory')?.value || 'knowledge';
+    const length = document.getElementById('articleLength')?.value || 'medium';
+
+    const wordCount = { short: '500字左右', medium: '800-1000字', long: '1200-1500字' };
+    const categoryDesc = {
+      knowledge: '知识科普',
+      appreciation: '器物赏析',
+      market: '市场观察'
+    };
+
+    return `你是一位建水紫陶内容创作者「老郭说宝」。请根据以下信息写一篇口播文稿。
+
+【风格指南】
+${Config.KNOWLEDGE_BASE.style}
+
+【文章分类】${categoryDesc[category] || category}
+【字数要求】${wordCount[length] || wordCount.medium}
+
+${topic ? `【选题】${topic}` : ''}
+${inspiration ? `【灵感素材】\n${inspiration}` : ''}
+${imageDesc ? `【器物描述】\n${imageDesc}` : ''}
+
+## 严禁事项（必须遵守）
+1. 禁止编造不存在的匠人姓名（如"李师傅""王老师"等），只提已知的真实作者
+2. 禁止给器物编造不存在的名称或款式名
+3. 禁止编造不存在的历史人物或典故
+4. 所有数据、人名、作品名必须有出处，不确定的不要提
+5. 如果不知道具体作者或作品名，直接说不确定，不要瞎编
+
+请直接输出正文，不要输出标题，不要输出配图提示词，不要输出其他说明。`;
+  },
+
+  async generateArticle() {
+    const llmConfig = Config.getDefault('llm');
+    if (!llmConfig) {
+      this.showStatus('❌ 未配置 LLM API，请先去设置中添加', 'error');
+      return;
+    }
+
+    this.state.generatingArticle = true;
+    document.getElementById('genLoading').classList.remove('hidden');
+    document.getElementById('btnGenerate').disabled = true;
+    document.getElementById('articleDisplay').classList.add('hidden');
+
+    const prompt = this.buildArticlePrompt();
+    let fullText = '';
+
+    try {
+      await LLM.chatStream(
+        llmConfig,
+        LLM.msgs('你是一位建水紫陶内容创作者，语言风格幽默大气、口语化。', prompt),
+        chunk => {
+          fullText += chunk;
+          this.state.article = fullText;
+          // 实时更新显示
+          const display = document.getElementById('articleDisplay');
+          if (display) {
+            display.classList.remove('hidden');
+            display.innerHTML = this.markdownToHtml(fullText);
+            display.scrollTop = display.scrollHeight;
+          }
+        },
+        { temperature: 0.8 }
+      );
+
+      this.state.generatingArticle = false;
+      this.state.articleEdited = fullText; // 默认修改版=原文
+      document.getElementById('genLoading').classList.add('hidden');
+      document.getElementById('btnGenerate').disabled = false;
+      this.saveDraft();
+      this.showStatus('✅ 正文生成完成！可以修改或下一步', 'success');
+      this.updateFooter();
+
+    } catch (err) {
+      this.state.generatingArticle = false;
+      document.getElementById('genLoading').classList.add('hidden');
+      document.getElementById('btnGenerate').disabled = false;
+      this.showStatus('❌ 生成失败：' + err.message, 'error');
+    }
+  },
+
+  // ---------- 步骤4：修改正文 ----------
+  renderStep4() {
+    const el = document.getElementById('mainContent');
+    const text = this.state.articleEdited || this.state.article;
+    el.innerHTML = `
+      <div class="step-panel">
+        <div class="step-header">
+          <h2>🔧 第四步：修改正文</h2>
+          <p class="step-desc">看完整篇文章，在下方写下你的修改意见。</p>
+        </div>
+
+        <!-- 文章预览（只读） -->
+        <div class="article-preview-box">
+          ${this.markdownToHtml(text)}
+        </div>
+
+        <!-- 修改方式选择 -->
+        <div class="rewrite-mode-selector">
+          <label class="rewrite-mode-item active" id="modeFineTune" onclick="App.setRewriteMode('fine')">
+            <input type="radio" name="rewriteMode" value="fine" checked hidden>
+            <span class="rewrite-mode-radio">●</span>
+            <div class="rewrite-mode-content">
+              <strong>微调</strong>
+              <span>根据你的意见针对性小改，保留原框架</span>
+            </div>
+          </label>
+          <label class="rewrite-mode-item" id="modeRewrite" onclick="App.setRewriteMode('full')">
+            <input type="radio" name="rewriteMode" value="full" hidden>
+            <span class="rewrite-mode-radio">○</span>
+            <div class="rewrite-mode-content">
+              <strong>重写</strong>
+              <span>根据你的意见整体重写，换角度/换结构</span>
+            </div>
+          </label>
+        </div>
+
+        <!-- 反馈输入 -->
+        <textarea id="feedbackInput" class="feedback-input"
+          placeholder="写下你的修改意见，比如：&#10;- 开头不够吸引人，换个悬念式开头&#10;- 第二段柴烧的部分太技术了，写得更通俗点&#10;- 中间加一个具体作品的例子"
+        ></textarea>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+          <button class="btn btn-primary" onclick="App.submitFeedback()">
+            ✨ 提交修改意见
+          </button>
+          <button class="btn btn-secondary btn-sm" onclick="App.toggleRawEdit()">
+            📝 直接编辑原文
+          </button>
+        </div>
+
+        <!-- 直接编辑区（默认隐藏） -->
+        <div id="rawEditWrap" class="hidden" style="margin-top:16px">
+          <textarea id="rawEditArea" class="edit-area"
+            oninput="App.state.articleEdited=this.value">${text}</textarea>
+        </div>
+
+        <div id="rewriteLoading" class="topic-loading hidden">
+          <div class="spinner"></div>
+          <p>✍️ AI 正在处理你的意见...</p>
+        </div>
+      </div>
+    `;
+    this._rewriteMode = 'fine';
+  },
+
+  _rewriteMode: 'fine',
+
+  setRewriteMode(mode) {
+    this._rewriteMode = mode;
+    document.getElementById('modeFineTune').classList.toggle('active', mode === 'fine');
+    document.getElementById('modeRewrite').classList.toggle('active', mode === 'full');
+  },
+
+  toggleRawEdit() {
+    const wrap = document.getElementById('rawEditWrap');
+    wrap.classList.toggle('hidden');
+    if (!wrap.classList.contains('hidden')) {
+      document.getElementById('rawEditArea').focus();
+    }
+  },
+
+  async submitFeedback() {
+    const feedback = document.getElementById('feedbackInput').value.trim();
+    if (!feedback) {
+      this.showStatus('请先写下修改意见', 'warning');
+      return;
+    }
+
+    const llmConfig = Config.getDefault('llm');
+    if (!llmConfig) {
+      this.showStatus('❌ 未配置 LLM API', 'error');
+      return;
+    }
+
+    const current = this.state.articleEdited || this.state.article;
+    const mode = this._rewriteMode === 'full' ? '整体重写' : '针对性微调';
+
+    document.getElementById('rewriteLoading').classList.remove('hidden');
+    let fullText = '';
+
+    try {
+      await LLM.chatStream(
+        llmConfig,
+        LLM.msgs(
+          '你是老郭说宝的文章编辑，擅长修改建水紫陶文章。直接输出修改后的全文，不要加任何说明。',
+          `请对以下文章进行${mode}。
+
+用户修改意见：
+${feedback}
+
+原文：
+${current}
+
+要求（必须全部遵守）：
+1. ${mode === '整体重写' ? '根据意见重新组织文章结构和角度' : '逐条落实每一条修改意见，不要遗漏'}
+2. 用户说改什么就改什么，用户提的所有意见都要体现在修改后的文章里
+3. 保留老郭说宝的幽默大气口语化风格
+4. 如果用户的修改意见涉及到纠正事实（如"火皮不只有灰色，也有金属光泽"），以用户的说法为准
+5. 直接输出修改后的全文`
+        ),
+        chunk => {
+          fullText += chunk;
+          this.state.articleEdited = fullText;
+          // 实时更新预览
+          const preview = document.querySelector('.article-preview-box');
+          if (preview) preview.innerHTML = this.markdownToHtml(fullText);
+          // 同步更新原始编辑区
+          const rawArea = document.getElementById('rawEditArea');
+          if (rawArea) rawArea.value = fullText;
+        },
+        { temperature: 0.7 }
+      );
+      document.getElementById('rewriteLoading').classList.add('hidden');
+      this.showStatus('✅ 修改完成，看看满不满意', 'success');
+      this.updateFooter();
+    } catch (err) {
+      document.getElementById('rewriteLoading').classList.add('hidden');
+      this.showStatus('❌ 修改失败：' + err.message, 'error');
+    }
+  },
+
+  // ---------- 步骤5：标题 ----------
+  renderStep5() {
+    const el = document.getElementById('mainContent');
+    const hasTitles = this.state.titles.length > 0;
+    el.innerHTML = `
+      <div class="step-panel">
+        <div class="step-header">
+          <h2>🏷️ 第五步：生成标题</h2>
+          <p class="step-desc">AI 根据正文生成 5 个备选标题，选定一个。</p>
+        </div>
+
+        <button class="btn btn-primary" onclick="App.generateTitles()" id="btnGenTitles">
+          🎯 生成标题方案
+        </button>
+
+        <div id="titleLoading" class="topic-loading hidden">
+          <div class="spinner"></div>
+          <p>🏷️ AI 正在构思标题...</p>
+        </div>
+
+        <div id="titleList" class="title-list ${hasTitles ? '' : 'hidden'}">
+          ${hasTitles ? this.state.titles.map((t, i) => `
+            <div class="title-card ${this.state.selectedTitle === t.title ? 'selected' : ''}"
+                 onclick="App.selectTitle(${i})">
+              <div class="title-index">#${i + 1}</div>
+              <div class="title-content">
+                <div class="title-text">${t.title}</div>
+                <div class="title-meta">
+                  <span class="title-score">⭐ ${'★'.repeat(Math.round(t.score || 3))}${'☆'.repeat(5 - Math.round(t.score || 3))} (${t.score})</span>
+                  ${t.note ? `<span class="title-note">${t.note}</span>` : ''}
+                  ${t.title.length <= 20 ? '<span class="tag tag-short">📱 小红书适用</span>' : ''}
+                </div>
+              </div>
+              <div class="title-check">${this.state.selectedTitle === t.title ? '✓' : ''}</div>
+            </div>
+          `).join('') : ''}
+        </div>
+      </div>
+    `;
+  },
+
+  async generateTitles() {
+    const llmConfig = Config.getDefault('llm');
+    if (!llmConfig) {
+      this.showStatus('❌ 未配置 LLM API', 'error');
+      return;
+    }
+
+    const article = this.state.articleEdited || this.state.article;
+    const first500 = article.substring(0, 500);
+
+    document.getElementById('titleLoading').classList.remove('hidden');
+    document.getElementById('btnGenTitles').disabled = true;
+
+    let fullText = '';
+    try {
+      await LLM.chatStream(
+        llmConfig,
+        LLM.msgs(`你是老郭说宝的标题策划专家。根据文章内容生成5个备选标题。
+
+要求：
+1. 标题要吸引人、有传播力
+2. 至少1个不超过20字（小红书适用）
+3. 风格符合老郭说宝：幽默大气、有温度
+4. 每个标题给出5分制评分和一句话评价
+
+返回 JSON 数组，格式：
+[{"title":"标题","score":4.5,"note":"评价"}]
+
+只返回 JSON，不要其他文字。`,
+`以下是文章开头：
+
+${first500}
+
+请生成 5 个标题方案。`),
+        chunk => { fullText += chunk; },
+        { temperature: 0.9, max_tokens: 2048 }
+      );
+
+      const titles = LLM.parseJSON(fullText);
+      this.state.titles = titles;
+      this.state.selectedTitle = '';
+      this.renderStep5();
+      this.updateFooter();
+    } catch (err) {
+      this.showStatus('❌ 标题生成失败：' + err.message, 'error');
+    } finally {
+      document.getElementById('titleLoading').classList.add('hidden');
+      document.getElementById('btnGenTitles').disabled = false;
+    }
+  },
+
+  selectTitle(index) {
+    this.state.selectedTitle = this.state.titles[index].title;
+    document.querySelectorAll('.title-card').forEach((c, i) => c.classList.toggle('selected', i === index));
+    document.querySelectorAll('.title-check').forEach((c, i) => { c.textContent = i === index ? '✓' : ''; });
+    this.updateFooter();
+  },
+
+  // ---------- 步骤6：配图提示词 ----------
+  renderStep6() {
+    const el = document.getElementById('mainContent');
+    const hasPrompts = this.state.imagePrompts.length > 0;
+    el.innerHTML = `
+      <div class="step-panel">
+        <div class="step-header">
+          <h2>🎨 第六步：配图提示词</h2>
+          <p class="step-desc">AI 根据文章内容生成 6-10 张配图提示词，用于文生图。</p>
+        </div>
+
+        <button class="btn btn-primary" onclick="App.generateImagePrompts()" id="btnGenPrompts">
+          🖼️ 生成配图提示词
+        </button>
+
+        <div id="promptLoading" class="topic-loading hidden">
+          <div class="spinner"></div>
+          <p>🎨 AI 正在构思配图方案...</p>
+        </div>
+
+        <div id="promptTable" class="${hasPrompts ? '' : 'hidden'}">
+          ${hasPrompts ? this.renderPromptTable() : ''}
+        </div>
+      </div>
+    `;
+  },
+
+  async generateImagePrompts() {
+    const llmConfig = Config.getDefault('llm');
+    if (!llmConfig) {
+      this.showStatus('❌ 未配置 LLM API', 'error');
+      return;
+    }
+
+    const title = this.state.selectedTitle || '建水紫陶';
+    const article = this.state.articleEdited || this.state.article;
+
+    document.getElementById('promptLoading').classList.remove('hidden');
+    document.getElementById('btnGenPrompts').disabled = true;
+
+    let fullText = '';
+    try {
+      await LLM.chatStream(
+        llmConfig,
+        LLM.msgs(`你是老郭说宝的配图策划师。根据文章内容生成 8 张配图提示词。
+
+要求：
+1. 每张提示词包含：画面内容、风格参考、画幅标注
+2. 画幅统一标注 "9:16竖版"
+3. 每张末尾加 "9:16竖版" 字样
+4. 提示词按文章叙事顺序排列
+5. 产品本身不需要配图（已有实物照片），配图用于辅助场景意境
+6. 画面要有审美、有意境，适合文生图模型
+
+返回 JSON 数组，格式：
+[{"scene":"画面内容描述","style":"风格参考，如中国风、水墨、工笔","ref":"参考艺术家或风格"}, ...]
+
+只返回 JSON，不要其他文字。`,
+`文章标题：${title}
+
+文章内容：
+${article.substring(0, 1500)}
+
+请生成 8 张配图提示词。`),
+        chunk => { fullText += chunk; },
+        { temperature: 0.85, max_tokens: 4096 }
+      );
+
+      const prompts = LLM.parseJSON(fullText);
+      this.state.imagePrompts = prompts;
+      this.renderStep6();
+      this.updateFooter();
+    } catch (err) {
+      this.showStatus('❌ 配图提示词生成失败：' + err.message, 'error');
+    } finally {
+      document.getElementById('promptLoading').classList.add('hidden');
+      document.getElementById('btnGenPrompts').disabled = false;
+    }
+  },
+
+  renderPromptTable() {
+    const prompts = this.state.imagePrompts;
+    if (!prompts || prompts.length === 0) return '';
+    let html = `<table class="prompt-table">
+      <thead>
+        <tr><th>序号</th><th>画面内容</th><th>风格</th><th>参考</th></tr>
+      </thead>
+      <tbody>`;
+    prompts.forEach((p, i) => {
+      html += `<tr>
+        <td>${i + 1}</td>
+        <td>${p.scene || ''}</td>
+        <td>${p.style || ''}</td>
+        <td>${p.ref || ''}</td>
+      </tr>`;
+    });
+    html += `</tbody></table>`;
+    return html;
+  },
+
+  // ---------- 步骤7：导出 ----------
+  renderStep7() {
+    const el = document.getElementById('mainContent');
+    const title = this.state.selectedTitle || '建水紫陶文章';
+    const article = this.state.articleEdited || this.state.article;
+    const prompts = this.state.imagePrompts;
+
+    // 拼装最终输出
+    let output = `# ${title}\n\n${article}\n`;
+    if (prompts && prompts.length > 0) {
+      output += `\n## 配图提示词\n\n`;
+      output += `| 序号 | 画面内容 | 风格参考 | 画幅 |\n`;
+      output += `|:----:|:---------|:---------|:-----|\n`;
+      prompts.forEach((p, i) => {
+        output += `| ${i + 1} | ${p.scene || ''} ${p.ref ? '（参考：' + p.ref + '）' : ''} | ${p.style || ''} | 9:16竖版 |\n`;
+      });
+    }
+    this.state.finalOutput = output;
+
+    el.innerHTML = `
+      <div class="step-panel">
+        <div class="step-header">
+          <h2>📥 第七步：导出</h2>
+          <p class="step-desc">预览完整文章，下载 .md 文件，或复制全文粘贴到 Bear。</p>
+        </div>
+
+        <div class="export-actions">
+          <button class="btn btn-success btn-lg" onclick="App.downloadMarkdown()">
+            📥 下载 .md 文件
+          </button>
+          <button class="btn btn-secondary btn-lg" onclick="App.copyArticle()">
+            📋 复制全文
+          </button>
+          <button class="btn btn-secondary" onclick="App.showExportPreview()">
+            👁️ 预览
+          </button>
+        </div>
+
+        <div class="export-summary">
+          <div class="summary-item">
+            <span class="summary-label">标题</span>
+            <span class="summary-value">${title}</span>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label">字数</span>
+            <span class="summary-value">${article.length} 字</span>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label">配图提示词</span>
+            <span class="summary-value">${prompts ? prompts.length : 0} 张</span>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label">已走过</span>
+            <span class="summary-value">
+              ${this.state.selectedTopic ? '✅ 选题' : '⬜ 选题'}
+              ${this.state.imageDesc ? ' ✅ 识图' : ' ⬜ 识图'}
+              ✅ 正文 ✅ 修改 ✅ 标题
+              ${prompts.length > 0 ? ' ✅ 配图' : ' ⬜ 配图'}
+            </span>
+          </div>
+        </div>
+      </div>
+    `;
+  },
+
+  showExportPreview() {
+    const body = document.getElementById('exportBody');
+    body.innerHTML = `<div class="article-display">${this.markdownToHtml(this.state.finalOutput)}</div>`;
+    this.openModal('exportModal');
+  },
+
+  downloadMarkdown() {
+    const content = this.state.finalOutput;
+    if (!content) {
+      this.showStatus('没有可导出的内容', 'error');
+      return;
+    }
+    const title = this.state.selectedTitle || '建水紫陶文章';
+    const date = new Date().toISOString().split('T')[0];
+    const filename = `${date}_${title}.md`;
+
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    this.showStatus(`✅ 已下载: ${filename}`, 'success');
+  },
+
+  copyArticle() {
+    const content = this.state.finalOutput;
+    if (!content) {
+      this.showStatus('没有可复制的内容', 'error');
+      return;
+    }
+    navigator.clipboard.writeText(content).then(() => {
+      this.showStatus('📋 已复制全文，可直接粘贴到 Bear', 'success');
+    }).catch(() => {
+      this.showStatus('复制失败，请手动复制', 'error');
+    });
+  },
+
+  // ====================== 设置面板 ======================
+  toggleSettings(e) {
+    const panel = document.getElementById('settingsPanel');
+    if (e && e.target === panel && !panel.classList.contains('hidden')) {
+      panel.classList.add('hidden');
+      return;
+    }
+    panel.classList.toggle('hidden');
+    if (!panel.classList.contains('hidden')) {
+      this.renderSettings();
+    }
+  },
+
+  renderSettings() {
+    const body = document.getElementById('settingsBody');
+    const configs = Config.loadAll();
+
+    body.innerHTML = `
+      <div class="settings-section">
+        <h3>🤖 LLM 配置</h3>
+        <p class="text-light">用于生成正文、标题、配图提示词</p>
+        ${this.renderConfigCards(configs.filter(c => c.type === 'llm'), 'llm')}
+        <button class="btn btn-secondary btn-sm" onclick="App.addConfig('llm')">➕ 添加 LLM 配置</button>
+      </div>
+
+      <div class="settings-section">
+        <h3>👁️ 视觉 API 配置</h3>
+        <p class="text-light">用于图片识别，默认调本地 http://127.0.0.1:8000</p>
+        ${this.renderConfigCards(configs.filter(c => c.type === 'vision'), 'vision')}
+        <button class="btn btn-secondary btn-sm" onclick="App.addConfig('vision')">➕ 添加视觉配置</button>
+      </div>
+
+      <div class="settings-section">
+        <h3>🔧 故障排查</h3>
+        <p class="text-light">如果本地 API 因 CORS 无法调用，试试用 HTTP 服务器打开页面：</p>
+        <pre class="code-block">cd 老郭网页版V2 && python3 -m http.server 8080</pre>
+        <p class="text-light">然后在浏览器打开 <code>http://localhost:8080</code></p>
+      </div>
+    `;
+  },
+
+  renderConfigCards(configs, type) {
+    if (configs.length === 0) return '<p class="text-light">暂无配置</p>';
+    return configs.map(c => `
+      <div class="config-card ${c.isDefault ? 'default' : ''}">
+        <div class="config-card-header">
+          <strong>${c.name}</strong>
+          <span class="config-badge">${c.isDefault ? '默认' : ''}</span>
+        </div>
+        <div class="config-card-body">
+          <div class="config-field">
+            <label>Endpoint</label>
+            <input type="text" value="${c.baseUrl}" onchange="App.updateConfigField('${c.id}','baseUrl',this.value)">
+          </div>
+          <div class="config-field">
+            <label>模型</label>
+            <input type="text" value="${c.model}" onchange="App.updateConfigField('${c.id}','model',this.value)">
+          </div>
+          <div class="config-field">
+            <label>API Key</label>
+            <input type="password" value="${c.key || ''}" placeholder="可选" onchange="App.updateConfigField('${c.id}','key',this.value)">
+          </div>
+        </div>
+        <div class="config-card-actions">
+          <button class="btn btn-sm ${c.isDefault ? 'btn-secondary' : 'btn-primary'}"
+                  onclick="App.setDefaultConfig('${c.id}')"
+                  ${c.isDefault ? 'disabled' : ''}>
+            ${c.isDefault ? '✓ 当前默认' : '设为默认'}
+          </button>
+          <button class="btn btn-sm btn-danger" onclick="App.deleteConfig('${c.id}')">删除</button>
+        </div>
+      </div>
+    `).join('');
+  },
+
+  addConfig(type) {
+    const id = 'cfg_' + Date.now();
+    const newConfig = {
+      id,
+      name: type === 'llm' ? '新 LLM' : '新视觉',
+      type,
+      baseUrl: type === 'llm' ? 'https://api.openai.com/v1' : 'http://127.0.0.1:8000',
+      model: type === 'llm' ? 'gpt-4o' : 'Qwen3.5-4B-MLX-4bit',
+      key: '',
+      isDefault: false
+    };
+    Config.upsert(newConfig);
+    this.renderSettings();
+  },
+
+  updateConfigField(id, field, value) {
+    const config = Config.get(id);
+    if (!config) return;
+    config[field] = value;
+    Config.upsert(config);
+  },
+
+  setDefaultConfig(id) {
+    Config.setDefault(id);
+    this.renderSettings();
+    this.showStatus('✅ 默认配置已更新', 'success');
+  },
+
+  deleteConfig(id) {
+    if (!confirm('确定删除这个配置？')) return;
+    Config.remove(id);
+    this.renderSettings();
+  },
+
+  // ====================== 工具函数 ======================
+
+  /** 简易 markdown → HTML */
+  markdownToHtml(text) {
+    if (!text) return '';
+    let html = text
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+      .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/^---$/gm, '<hr>')
+      .replace(/^- (.+)$/gm, '<li>$1</li>')
+      .replace(/^\|(.+)\|$/gm, (match) => {
+        // 表格行
+        const cells = match.split('|').filter(c => c.trim());
+        if (cells.every(c => /^[-:\s]+$/.test(c))) return '<tr class="sep">';
+        return '<tr><td>' + cells.join('</td><td>') + '</td></tr>';
+      });
+
+    // 列表包裹
+    html = html.replace(/(<li>.*<\/li>\n?)+/g, m => '<ul>' + m + '</ul>');
+
+    // 表格包裹
+    html = html.replace(/(<tr>.*<\/tr>\n?)+/g, m => '<table>' + m.replace('<tr class="sep">', '') + '</table>');
+
+    // 段落
+    const lines = html.split('\n');
+    let result = '';
+    for (const line of lines) {
+      if (line.startsWith('<') || line.trim() === '') {
+        result += line + '\n';
+      } else {
+        result += '<p>' + line + '</p>\n';
+      }
+    }
+    return result;
+  },
+
+  showStatus(message, type = 'info') {
+    const status = document.getElementById('statusMessage');
+    if (status) {
+      status.className = `status status-${type}`;
+      status.textContent = message;
+      status.classList.remove('hidden');
+      clearTimeout(this._statusTimer);
+      this._statusTimer = setTimeout(() => status.classList.add('hidden'), type === 'error' ? 8000 : 5000);
+    }
+  },
+
+  openModal(id) {
+    document.getElementById(id)?.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  },
+
+  closeModal(id) {
+    document.getElementById(id)?.classList.add('hidden');
+    document.body.style.overflow = '';
+  },
+
+  /** 自动存档：保存当前工作进度 */
+  saveDraft() {
+    try {
+      localStorage.setItem('laoguo_v2_draft_full', JSON.stringify({
+        article: this.state.article,
+        articleEdited: this.state.articleEdited,
+        selectedTitle: this.state.selectedTitle,
+        imagePrompts: this.state.imagePrompts,
+        imageDesc: this.state.imageDesc,
+        step: this.state.step,
+        savedAt: Date.now()
+      }));
+    } catch (e) { /* */ }
+  },
+
+  /** 恢复自动存档 */
+  loadDraft() {
+    try {
+      const raw = localStorage.getItem('laoguo_v2_draft_full');
+      if (raw) {
+        const data = JSON.parse(raw);
+        // 只恢复24小时内的存档
+        if (data.savedAt && Date.now() - data.savedAt < 86400000) {
+          if (data.article) this.state.article = data.article;
+          if (data.articleEdited) this.state.articleEdited = data.articleEdited;
+          if (data.selectedTitle) this.state.selectedTitle = data.selectedTitle;
+          if (data.imagePrompts) this.state.imagePrompts = data.imagePrompts;
+          if (data.imageDesc) this.state.imageDesc = data.imageDesc;
+        }
+      }
+    } catch (e) { /* */ }
+  },
+
+  /** 保存选题列表到 localStorage */
+  saveTopicsToStorage() {
+    try {
+      localStorage.setItem('laoguo_v2_topics', JSON.stringify({
+        topics: this.state.topics,
+        savedAt: Date.now()
+      }));
+    } catch (e) { /* */ }
+  },
+
+  /** 从 localStorage 恢复选题列表 */
+  loadTopicsFromStorage() {
+    try {
+      const raw = localStorage.getItem('laoguo_v2_topics');
+      if (raw) {
+        const data = JSON.parse(raw);
+        if (data.topics && data.topics.length > 0) {
+          this.state.topics = data.topics;
+        }
+      }
+    } catch (e) { /* */ }
+  },
+
+  /** 保存灵感草稿到 localStorage */
+  saveInspirationDraft() {
+    try {
+      localStorage.setItem('laoguo_v2_draft', JSON.stringify({
+        inspiration: this.state.inspiration,
+        selectedTopic: this.state.selectedTopic
+      }));
+    } catch (e) { /* ignore */ }
+  },
+
+  /** 加载灵感草稿 */
+  loadInspirationDraft() {
+    try {
+      const raw = localStorage.getItem('laoguo_v2_draft');
+      if (raw) {
+        const draft = JSON.parse(raw);
+        if (draft.inspiration) this.state.inspiration = draft.inspiration;
+        if (draft.selectedTopic) this.state.selectedTopic = draft.selectedTopic;
+      }
+    } catch (e) { /* ignore */ }
+  },
+
+  /** 保存文章到历史记录 */
+  saveToHistory() {
+    const title = this.state.selectedTitle || '未命名文章';
+    const article = this.state.articleEdited || this.state.article;
+    if (!article) return;
+
+    const record = {
+      id: Date.now().toString(),
+      title,
+      category: this.state.currentCategory,
+      preview: article.substring(0, 150),
+      article,
+      imagePrompts: this.state.imagePrompts,
+      selectedTopic: this.state.selectedTopic,
+      createdAt: new Date().toISOString()
+    };
+
+    let history = [];
+    try {
+      const raw = localStorage.getItem('laoguo_v2_history');
+      if (raw) history = JSON.parse(raw);
+    } catch (e) { /* */ }
+    history.unshift(record);
+    if (history.length > 50) history = history.slice(0, 50);
+    localStorage.setItem('laoguo_v2_history', JSON.stringify(history));
+  },
+
+  /** 渲染历史记录列表 */
+  renderHistory() {
+    const container = document.getElementById('historyList');
+    if (!container) return;
+
+    let history = [];
+    try {
+      const raw = localStorage.getItem('laoguo_v2_history');
+      if (raw) history = JSON.parse(raw);
+    } catch (e) { /* */ }
+
+    if (history.length === 0) {
+      container.innerHTML = '<p class="text-light" style="padding:20px;text-align:center">暂无历史文章</p>';
+      return;
+    }
+
+    container.innerHTML = history.map((item, i) => `
+      <div class="history-item" onclick="App.loadHistoryItem(${i})">
+        <div class="history-item-title">${item.title}</div>
+        <div class="history-item-meta">${new Date(item.createdAt).toLocaleString('zh-CN')} · ${item.category || ''}</div>
+        <div class="history-item-preview">${item.preview}...</div>
+      </div>
+    `).join('');
+  },
+
+  /** 加载历史文章 */
+  loadHistoryItem(index) {
+    let history = [];
+    try {
+      const raw = localStorage.getItem('laoguo_v2_history');
+      if (raw) history = JSON.parse(raw);
+    } catch (e) { /* */ }
+    if (!history[index]) return;
+
+    const item = history[index];
+    this.state.article = item.article;
+    this.state.articleEdited = item.article;
+    this.state.imagePrompts = item.imagePrompts || [];
+    this.state.selectedTitle = item.title;
+    this.state.selectedTopic = item.selectedTopic || '';
+    this.state.finalOutput = `# ${item.title}\n\n${item.article}\n`;
+    this.goToStep(7); // 跳到导出预览
+    this.showStatus('✅ 已加载历史文章', 'success');
+  },
+
+  /** 绑定全局事件 */
+  bindEvents() {
+    // 键盘快捷键
+    document.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.key === 'Enter') {
+        e.preventDefault();
+        this.nextStep();
+      }
+    });
+  }
+};
+
+// ====================== 启动 ======================
+document.addEventListener('DOMContentLoaded', () => {
+  App.init();
+});
