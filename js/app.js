@@ -836,6 +836,9 @@ ${imageDesc ? `【器物描述】\n${imageDesc}` : ''}
           <button class="btn btn-primary" onclick="App.submitFeedback()">
             ✨ 提交修改意见
           </button>
+          <button class="btn btn-secondary btn-sm" onclick="App.saveEditFeedback()" title="将修改意见保存到知识库，下次写类似文章时AI会自动参考">
+            💾 保存修改经验
+          </button>
           <button class="btn btn-secondary btn-sm" onclick="App.toggleRawEdit()">
             📝 直接编辑原文
           </button>
@@ -879,6 +882,9 @@ ${imageDesc ? `【器物描述】\n${imageDesc}` : ''}
       return;
     }
 
+    // 自动保存修改意见到知识库，下次生成时参考
+    this._autoSaveFeedback(feedback);
+
     const llmConfig = Config.getDefault('llm');
     if (!llmConfig) {
       this.showStatus('❌ 未配置 LLM API', 'error');
@@ -895,7 +901,13 @@ ${imageDesc ? `【器物描述】\n${imageDesc}` : ''}
       await LLM.chatStream(
         llmConfig,
         LLM.msgs(
-          '你是老郭说宝的文章编辑，擅长修改建水紫陶文章。直接输出修改后的全文，不要加任何说明。',
+          `你是老郭说宝的文章编辑，深谙建水紫陶知识体系和老郭的写作风格。直接输出修改后的全文，不要加任何说明。
+
+知识体系（必须基于事实）：
+${Config.KNOWLEDGE_BASE.zitao}
+
+风格指南（必须保留）：
+${Config.KNOWLEDGE_BASE.style}`,
           `请对以下文章进行${mode}。
 
 用户修改意见：
@@ -929,6 +941,49 @@ ${current}
     } catch (err) {
       document.getElementById('rewriteLoading').classList.add('hidden');
       this.showStatus('❌ 修改失败：' + err.message, 'error');
+    }
+  },
+
+  /** 自动保存修改意见（供 submitFeedback 内部调用，不弹提示） */
+  _autoSaveFeedback(feedback) {
+    const topic = this.state.selectedTopic || this.state.inspiration || '未分类';
+    try {
+      let history = [];
+      const raw = localStorage.getItem('laoguo_v2_edit_feedback');
+      if (raw) history = JSON.parse(raw);
+      history.push({
+        topic: topic.substring(0, 50),
+        feedback,
+        createdAt: new Date().toISOString()
+      });
+      if (history.length > 50) history = history.slice(-50);
+      localStorage.setItem('laoguo_v2_edit_feedback', JSON.stringify(history));
+    } catch (e) { /* 静默失败，不影响主流程 */ }
+  },
+
+  /** 保存修改意见到知识库，下次生成时自动参考 */
+  saveEditFeedback() {
+    const feedback = document.getElementById('feedbackInput')?.value.trim();
+    if (!feedback) {
+      this.showStatus('请先在输入框中写下修改意见再保存', 'warning');
+      return;
+    }
+    const topic = this.state.selectedTopic || this.state.inspiration || '未分类';
+    try {
+      let history = [];
+      const raw = localStorage.getItem('laoguo_v2_edit_feedback');
+      if (raw) history = JSON.parse(raw);
+      history.push({
+        topic: topic.substring(0, 50),
+        feedback,
+        createdAt: new Date().toISOString()
+      });
+      // 最多保留 50 条
+      if (history.length > 50) history = history.slice(-50);
+      localStorage.setItem('laoguo_v2_edit_feedback', JSON.stringify(history));
+      this.showStatus('✅ 修改经验已保存！下次生成相似选题时会自动参考', 'success');
+    } catch (e) {
+      this.showStatus('保存失败', 'error');
     }
   },
 
