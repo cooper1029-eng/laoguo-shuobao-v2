@@ -725,6 +725,7 @@ ${imageDesc ? `【器物描述】\n${imageDesc}` : ''}
 7. 不要输出标题，不要输出配图提示词，不要输出其他说明——直接输出正文
 
 请直接输出正文。`;
+  },
 
   async generateArticle() {
     const llmConfig = Config.getDefault('llm');
