@@ -633,6 +633,50 @@ const App = {
     // 在生成时使用即可
   },
 
+  /** 从历史记录中获取 1-2 篇示例文章用于 few-shot */
+  getFewShotArticles() {
+    try {
+      const raw = localStorage.getItem('laoguo_v2_history');
+      if (!raw) return '';
+      const history = JSON.parse(raw);
+      if (history.length === 0) return '';
+      // 取最新 2 篇不同分类的文章作为示例
+      const categories = new Set();
+      const samples = [];
+      for (const item of history) {
+        if (samples.length >= 2) break;
+        const cat = item.category || 'knowledge';
+        if (!categories.has(cat)) {
+          categories.add(cat);
+          samples.push(item);
+        }
+      }
+      if (samples.length === 0) samples.push(history[0]);
+      return samples.map((item, i) =>
+        `【示例文章${i + 1}】\n标题：${item.title}\n正文：\n${item.article.substring(0, 800)}`
+      ).join('\n\n');
+    } catch (e) {
+      return '';
+    }
+  },
+
+  /** 获取历史修改反馈，用于指导本次生成 */
+  getEditFeedback() {
+    try {
+      const raw = localStorage.getItem('laoguo_v2_edit_feedback');
+      if (!raw) return '';
+      const feedbacks = JSON.parse(raw);
+      if (feedbacks.length === 0) return '';
+      // 取最近 5 条修改意见
+      const recent = feedbacks.slice(-5);
+      return recent.map((fb, i) =>
+        `【历史修改${i + 1}】主题：${fb.topic || '未分类'} | 修改意见：${fb.feedback}`
+      ).join('\n');
+    } catch (e) {
+      return '';
+    }
+  },
+
   buildArticlePrompt() {
     const topic = this.state.selectedTopic || '建水紫陶';
     const inspiration = this.state.inspiration || '';
@@ -647,10 +691,22 @@ const App = {
       market: '市场观察'
     };
 
+    const examples = this.getFewShotArticles();
+    const editFeedback = this.getEditFeedback();
+
     return `你是一位建水紫陶内容创作者「老郭说宝」。请根据以下信息写一篇口播文稿。
 
-【风格指南】
+【知识体系（必须基于此写作）】
+${Config.KNOWLEDGE_BASE.zitao}
+
+【风格指南（必须严格遵守）】
 ${Config.KNOWLEDGE_BASE.style}
+
+【已写过的方向（避免重复）】
+${Config.KNOWLEDGE_BASE.covered}
+
+${editFeedback ? `【历史修改经验（本次写作要特别注意）】\n${editFeedback}\n` : ''}
+${examples ? `【参考示例（模仿其文风和结构）】\n${examples}\n` : ''}
 
 【文章分类】${categoryDesc[category] || category}
 【字数要求】${wordCount[length] || wordCount.medium}
@@ -665,9 +721,10 @@ ${imageDesc ? `【器物描述】\n${imageDesc}` : ''}
 3. 禁止编造不存在的历史人物或典故
 4. 所有数据、人名、作品名必须有出处，不确定的不要提
 5. 如果不知道具体作者或作品名，直接说不确定，不要瞎编
+6. 禁止使用破折号（——），用逗号、冒号或直接分层叙述替代
+7. 不要输出标题，不要输出配图提示词，不要输出其他说明——直接输出正文
 
-请直接输出正文，不要输出标题，不要输出配图提示词，不要输出其他说明。`;
-  },
+请直接输出正文。`;
 
   async generateArticle() {
     const llmConfig = Config.getDefault('llm');
@@ -687,7 +744,23 @@ ${imageDesc ? `【器物描述】\n${imageDesc}` : ''}
     try {
       await LLM.chatStream(
         llmConfig,
-        LLM.msgs('你是一位建水紫陶内容创作者，语言风格幽默大气、口语化。', prompt),
+        LLM.msgs(
+          `你是「老郭说宝」—— 建水紫陶行业从业者、直播带货主播、文化传播者。
+你的口吻：懂行但不装、接地气的行家，从一线经验出发，专业自信但不傲慢。
+你对读者称"您"为主，偶尔用"你"，保持尊重且亲切。
+
+写作铁律（刻在骨子里的）：
+1. 口播感强：短段落、短句子，读起来像在说话
+2. 多用设问："为什么？因为……"
+3. 口语化插入语："我跟你说""您想想""说得直白一点"
+4. 高频过渡词："说白了""说白了就是"
+5. 每篇必有具体匠人名字，从知识体系中选
+6. 每篇植入一个文化概念或历史典故（侘寂、锦灰堆、宋徽宗等）
+7. 论证手法：权威背书（上海交大研究）+ 具体数据 + 类比打比方 + 亲身经验
+8. 永远不要破折号（——）
+9. 结尾固定句："我是老郭，讲述有宝物的故事，和有故事的宝物。下期见！"
+10. 反对玄学，用科学和数据说话；不拉踩紫砂；理性消费观`,
+          prompt),
         chunk => {
           fullText += chunk;
           this.state.article = fullText;
