@@ -1175,20 +1175,18 @@ ${article.substring(0, 1500)}
   renderPromptTable() {
     const prompts = this.state.imagePrompts;
     if (!prompts || prompts.length === 0) return '';
-    let html = `<table class="prompt-table">
-      <thead>
-        <tr><th>序号</th><th>画面内容</th><th>风格</th><th>参考</th></tr>
-      </thead>
-      <tbody>`;
+    let html = `<div class="prompt-list">`;
     prompts.forEach((p, i) => {
-      html += `<tr>
-        <td>${i + 1}</td>
-        <td>${p.scene || ''}</td>
-        <td>${p.style || ''}</td>
-        <td>${p.ref || ''}</td>
-      </tr>`;
+      const parts = [p.scene || ''];
+      if (p.style) parts.push(`风格参考：${p.style}`);
+      if (p.ref) parts.push(`参考：${p.ref}`);
+      parts.push('9:16竖版');
+      html += `<div class="prompt-item" style="padding:10px 14px;margin-bottom:8px;border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--bg-card);font-size:0.88em;line-height:1.6;">
+        <span style="font-weight:600;color:var(--primary);margin-right:6px;">#${i + 1}</span>
+        ${parts.map(s => `<span>${s}</span>`).join('，')}
+      </div>`;
     });
-    html += `</tbody></table>`;
+    html += `</div>`;
     return html;
   },
 
@@ -1203,10 +1201,12 @@ ${article.substring(0, 1500)}
     let output = `# ${title}\n\n${article}\n`;
     if (prompts && prompts.length > 0) {
       output += `\n## 配图提示词\n\n`;
-      output += `| 序号 | 画面内容 | 风格参考 | 画幅 |\n`;
-      output += `|:----:|:---------|:---------|:-----|\n`;
       prompts.forEach((p, i) => {
-        output += `| ${i + 1} | ${p.scene || ''} ${p.ref ? '（参考：' + p.ref + '）' : ''} | ${p.style || ''} | 9:16竖版 |\n`;
+        let line = `${i + 1}. ${p.scene || ''}`;
+        if (p.style) line += `，风格参考：${p.style}`;
+        if (p.ref) line += `，参考：${p.ref}`;
+        line += `，9:16竖版`;
+        output += line + `\n\n`;
       });
     }
     this.state.finalOutput = output;
