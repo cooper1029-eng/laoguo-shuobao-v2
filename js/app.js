@@ -683,7 +683,7 @@ const App = {
   },
 
   buildArticlePrompt() {
-    const topic = this.state.selectedTopic || '建水紫陶';
+    const topic = this.state.selectedTopic || (inspiration ? '' : '建水紫陶');
     const inspiration = this.state.inspiration || '';
     const imageDesc = this.state.imageDesc || '';
     const category = document.getElementById('articleCategory')?.value || 'knowledge';
@@ -708,9 +708,15 @@ ${imageDesc}
 
 强制要求：文章必须以这件器物为主体，开篇就要引入它，全文围绕其特征、工艺、美感展开分析。禁止忽略此素材写成泛泛的科普文。
 ===== 以下是风格和知识参考 =====
-` : ''}
-【选题】${topic || '建水紫陶'}
-${inspiration ? `【灵感素材】\n${inspiration}\n` : ''}
+` : (inspiration ? `
+===== 核心素材（用户提供的灵感，文章必须围绕此展开） =====
+${inspiration}
+
+强制要求：文章必须以以上灵感为核心展开，不要偏离到其他话题。
+===== 以下是风格和知识参考 =====
+` : '')}
+${topic ? `【选题】${topic}` : ''}
+${(!topic && inspiration && !hasImage) ? '' : (inspiration ? `【灵感素材】\n${inspiration}\n` : '')}
 【文章分类】${categoryDesc[category] || category}
 【字数要求】${wordCount[length] || wordCount.medium}
 
