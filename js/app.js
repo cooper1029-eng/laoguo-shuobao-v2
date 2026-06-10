@@ -542,7 +542,7 @@ const App = {
         desc.innerHTML = `
           <h3>✏️ 手动描述器物</h3>
           <p style="color:var(--text-secondary);font-size:0.85em;margin-bottom:8px">
-            ⚠️ 本地识图暂时不可用，简单写下你看到什么就行：
+            ⚠️ 识图暂时不可用（${err.message}），简单写下你看到什么就行：
           </p>
           <textarea class="feedback-input" id="manualVisionDesc"
             placeholder="例如：这是一把柴烧侧把壶，壶身有火皮痕迹，刻了山水"
@@ -558,10 +558,12 @@ const App = {
           </div>
         `;
       }
-      if (msg.includes('代理') || msg.includes('Failed to fetch')) {
-        this.showStatus('⚠️ 代理没启动 → 终端: python3 proxy/vision_proxy.py', 'warning');
-      } else if (msg.includes('未配置')) {
-        this.showStatus('❌ ' + msg + ' → 点右上角 ⚙️ 设置', 'error');
+      if (err.message.includes('代理') || err.message.includes('Failed to fetch')) {
+        this.showStatus('⚠️ 本地视觉代理未启动 → 终端运行: python3 proxy/vision_proxy.py', 'warning');
+      } else if (err.message.includes('未配置') || err.message.includes('no_config')) {
+        this.showStatus('❌ ' + err.message + ' → 点右上角 ⚙️ 设置', 'error');
+      } else {
+        this.showStatus('⚠️ 识图失败：' + err.message, 'error');
       }
     } finally {
       document.getElementById('visionLoading').classList.add('hidden');
@@ -580,6 +582,9 @@ const App = {
       this.renderStep2();
     };
     el.parentNode.replaceChild(textarea, el);
+    // 展开父容器，避免被 max-height 裁剪
+    const resultBox = document.querySelector('.vision-result');
+    if (resultBox) resultBox.style.maxHeight = 'none';
     textarea.focus();
   },
 
@@ -684,6 +689,8 @@ const App = {
     const category = document.getElementById('articleCategory')?.value || 'knowledge';
     const length = document.getElementById('articleLength')?.value || 'medium';
 
+    const hasImage = !!imageDesc;
+
     const wordCount = { short: '500字左右', medium: '800-1000字', long: '1200-1500字' };
     const categoryDesc = {
       knowledge: '知识科普',
@@ -695,6 +702,17 @@ const App = {
     const editFeedback = this.getEditFeedback();
 
     return `你是一位建水紫陶内容创作者「老郭说宝」。请根据以下信息写一篇口播文稿。
+${hasImage ? `
+===== 核心素材（本次写作的主角，文章必须围绕此器物展开） =====
+${imageDesc}
+
+强制要求：文章必须以这件器物为主体，开篇就要引入它，全文围绕其特征、工艺、美感展开分析。禁止忽略此素材写成泛泛的科普文。
+===== 以下是风格和知识参考 =====
+` : ''}
+【选题】${topic || '建水紫陶'}
+${inspiration ? `【灵感素材】\n${inspiration}\n` : ''}
+【文章分类】${categoryDesc[category] || category}
+【字数要求】${wordCount[length] || wordCount.medium}
 
 【知识体系（必须基于此写作）】
 ${Config.KNOWLEDGE_BASE.zitao}
@@ -707,13 +725,6 @@ ${Config.KNOWLEDGE_BASE.covered}
 
 ${editFeedback ? `【历史修改经验（本次写作要特别注意）】\n${editFeedback}\n` : ''}
 ${examples ? `【参考示例（模仿其文风和结构）】\n${examples}\n` : ''}
-
-【文章分类】${categoryDesc[category] || category}
-【字数要求】${wordCount[length] || wordCount.medium}
-
-${topic ? `【选题】${topic}` : ''}
-${inspiration ? `【灵感素材】\n${inspiration}` : ''}
-${imageDesc ? `【器物描述】\n${imageDesc}` : ''}
 
 ## 严禁事项（必须遵守）
 1. 禁止编造不存在的匠人姓名（如"李师傅""王老师"等），只提已知的真实作者

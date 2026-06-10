@@ -115,16 +115,9 @@ const Vision = {
   },
 
   /** 调用云端 LLM 视觉（如 GPT-4o、Claude 等支持图片的模型） */
-  async recognizeCloud(imageUrls, onProgress) {
-    const config = Config.getDefault('llm');
+  async recognizeCloud(imageUrls, onProgress, configOverride) {
+    const config = configOverride || Config.getDefault('llm');
     if (!config) throw new VisionError('no_config', '未配置 LLM API');
-
-    // 只支持已知的视觉模型
-    const visionModels = ['gpt-4o', 'gpt-4o-mini', 'claude-3-5-sonnet', 'claude-3-opus'];
-    const isVision = visionModels.some(m => config.model.toLowerCase().includes(m));
-    if (!isVision) {
-      throw new VisionError('no_vision', `当前模型 ${config.model} 不支持看图，请换用 GPT-4o 或 Claude`);
-    }
 
     const systemPrompt = `你是建水紫陶鉴定专家。用中文描述图片中的紫陶器物。
 
@@ -138,7 +131,9 @@ const Vision = {
 
     const content = [];
     imageUrls.forEach(url => {
-      content.push({ type: 'image_url', image_url: { url } });
+      // 确保图片为 data URL 格式（云端视觉 API 需要完整前缀）
+      const imgUrl = url.startsWith('data:') ? url : `data:image/png;base64,${url}`;
+      content.push({ type: 'image_url', image_url: { url: imgUrl } });
     });
     content.push({ type: 'text', text: '请描述这张紫陶器物的特征。' });
 
@@ -147,9 +142,16 @@ const Vision = {
       { role: 'user', content }
     ];
 
-    if (onProgress) onProgress('正在通过云端 API 识图...');
+    if (onProgress) onProgress('正在通过云端视觉 API 识别...');
 
-    const url = `${config.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
+    // 兼容两种 endpoint 格式：
+    //   完整路径：https://api.xiaomimimo.com/v1/chat/completions
+    //   基础路径：https://api.deepseek.com  → 自动拼接 /v1/chat/completions
+    let url = config.baseUrl.replace(/\/+$/, '');
+    if (!url.endsWith('/chat/completions')) {
+      url += url.includes('/v1') ? '/chat/completions' : '/v1/chat/completions';
+    }
+
     const body = {
       model: config.model,
       messages,
@@ -158,16 +160,19 @@ const Vision = {
       temperature: 0.3
     };
 
+    const headers = { 'Content-Type': 'application/json' };
+    if (config.key) headers['Authorization'] = `Bearer ${config.key}`;
+
     const response = await fetch(url, {
       method: 'POST',
-      headers: Config.buildHeaders(config),
+      headers,
       body: JSON.stringify(body)
     });
 
     if (!response.ok) {
       let errMsg = `HTTP ${response.status}`;
       try { const err = await response.json(); errMsg = err.error?.message || err.error || errMsg; } catch (e) { /* */ }
-      throw new VisionError('api_error', `云端 API 请求失败: ${errMsg}`);
+      throw new VisionError('api_error', `云端视觉 API 请求失败: ${errMsg}`);
     }
 
     const json = await response.json();
@@ -177,10 +182,14 @@ const Vision = {
     return this.cleanResponse(text);
   },
 
-  /** 主要识图入口 */
+  /** 主要识图入口：优先用配置的视觉 API，其次走本地代理 */
   async recognize(imageUrls, onProgress) {
-    // 本地视觉 API（oMLX 4bit 量化模型识别效果不稳定）
-    // 失败时由 app.js 自动切换为手动输入
+    // 检查是否有配置的视觉 API（如小米 mimo）
+    const visionConfig = Config.getDefault('vision');
+    if (visionConfig && visionConfig.baseUrl) {
+      return await this.recognizeCloud(imageUrls, onProgress, visionConfig);
+    }
+    // 回退到本地视觉代理
     return await this.recognizeLocal(imageUrls, onProgress);
   },
 
