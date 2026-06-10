@@ -97,7 +97,8 @@ const App = {
           </div>
           <div class="modal-body" id="exportBody"></div>
           <div class="modal-footer">
-            <button class="btn btn-success" onclick="App.downloadMarkdown()">📥 下载 .md 文件</button>
+            <button class="btn btn-success" onclick="App.saveToObsidian()">📝 保存到 Obsidian</button>
+            <button class="btn btn-secondary" onclick="App.downloadMarkdown()">📥 下载 .md 文件</button>
             <button class="btn btn-secondary" onclick="App.copyArticle()">📋 复制全文</button>
             <button class="btn btn-secondary" onclick="App.closeModal('exportModal')">关闭</button>
           </div>
@@ -1250,7 +1251,10 @@ ${article.substring(0, 1500)}
         </div>
 
         <div class="export-actions">
-          <button class="btn btn-success btn-lg" onclick="App.downloadMarkdown()">
+          <button class="btn btn-success btn-lg" onclick="App.saveToObsidian()">
+            📝 保存到 Obsidian
+          </button>
+          <button class="btn btn-secondary btn-lg" onclick="App.downloadMarkdown()">
             📥 下载 .md 文件
           </button>
           <button class="btn btn-secondary btn-lg" onclick="App.copyArticle()">
@@ -1328,6 +1332,99 @@ ${article.substring(0, 1500)}
     }).catch(() => {
       this.showStatus('复制失败，请手动复制', 'error');
     });
+  },
+
+  // ====================== 保存到 Obsidian ======================
+
+  _obsidianDirHandle: null,
+
+  async _initObsidianDB() {
+    if (this._obsidianDB) return this._obsidianDB;
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open('laoguo_obsidian', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('kv');
+      req.onsuccess = () => { this._obsidianDB = req.result; resolve(this._obsidianDB); };
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  async _loadObsidianHandle() {
+    if (this._obsidianDirHandle) return this._obsidianDirHandle;
+    try {
+      const db = await this._initObsidianDB();
+      return await new Promise((resolve) => {
+        const tx = db.transaction('kv', 'readonly');
+        const req = tx.objectStore('kv').get('dirHandle');
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      });
+    } catch { return null; }
+  },
+
+  async _saveObsidianHandle(handle) {
+    this._obsidianDirHandle = handle;
+    try {
+      const db = await this._initObsidianDB();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction('kv', 'readwrite');
+        tx.objectStore('kv').put(handle, 'dirHandle');
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch { /* 内存里已有，不影响 */ }
+  },
+
+  async _pickObsidianFolder() {
+    if (!('showDirectoryPicker' in window)) {
+      this.showStatus('⚠️ 当前浏览器不支持直接保存到文件夹，请用 Chrome 或 Edge', 'warning');
+      return null;
+    }
+    try {
+      const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+      await this._saveObsidianHandle(handle);
+      return handle;
+    } catch (e) {
+      if (e.name !== 'AbortError') this.showStatus('❌ 选择文件夹失败：' + e.message, 'error');
+      return null;
+    }
+  },
+
+  async saveToObsidian() {
+    const content = this.state.finalOutput;
+    if (!content) {
+      this.showStatus('没有可保存的内容', 'error');
+      return;
+    }
+
+    // 1. 获取或选择目录
+    let dirHandle = await this._loadObsidianHandle();
+    if (dirHandle) {
+      const perm = await dirHandle.requestPermission({ mode: 'readwrite' });
+      if (perm !== 'granted') {
+        dirHandle = await this._pickObsidianFolder();
+        if (!dirHandle) return;
+      }
+    } else {
+      dirHandle = await this._pickObsidianFolder();
+      if (!dirHandle) return;
+    }
+
+    // 2. 构建文件名：日期_标题.md（去掉文件系统不允许的字符）
+    const title = this.state.selectedTitle || '建水紫陶文章';
+    const date = new Date().toISOString().split('T')[0];
+    const safeName = title.replace(/[\\/:*?"<>|]/g, '_');
+    const filename = `${date}_${safeName}.md`;
+
+    // 3. 写入文件
+    try {
+      const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(content);
+      await writable.close();
+      this.showStatus(`✅ 已保存到 Obsidian: ${filename}`, 'success');
+    } catch (e) {
+      this.showStatus('❌ 保存失败：' + e.message, 'error');
+    }
   },
 
   // ====================== 设置面板 ======================
