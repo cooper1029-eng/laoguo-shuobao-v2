@@ -21,7 +21,6 @@ const App = {
     // 步骤5：标题
     titles: [],
     selectedTitle: '',
-    pendingTitleIndex: -1,   // 暂定的标题下标，-1=无暂定
     // 步骤6：配图
     imagePrompts: [],
     promptChecked: [],        // 每个配图是否被勾选（用于单独重生成）
@@ -1027,25 +1026,21 @@ ${current}
   renderStep5() {
     const el = document.getElementById('mainContent');
     const hasTitles = this.state.titles.length > 0;
-    const hasPending = this.state.pendingTitleIndex >= 0;
+    const hasSelected = !!this.state.selectedTitle;
     el.innerHTML = `
       <div class="step-panel">
         <div class="step-header">
           <h2>🏷️ 第五步：生成标题</h2>
-          <p class="step-desc">AI 根据正文生成 5 个备选标题，点击标题选定，点「暂定」留作备选。</p>
+          <p class="step-desc">AI 根据正文生成 5 个备选标题，点击标题选定。点「重新生成」可换掉不满意的。</p>
         </div>
 
         <div class="title-actions" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
           <button class="btn btn-primary" onclick="App.generateTitles()" id="btnGenTitles">
             🎯 生成标题方案
           </button>
-          <button class="btn btn-secondary" onclick="App.regenerateAllTitles()" id="btnRegenTitles"
-                  style="display:${hasTitles && !hasPending ? 'inline-flex' : 'none'}">
-            🔄 全部重新生成
-          </button>
-          <button class="btn btn-warning" onclick="App.regenerateTitlesKeepPending()" id="btnRegenKeep"
-                  style="display:${hasPending ? 'inline-flex' : 'none'}">
-            📌 重新生成（已暂定 #${hasPending ? this.state.pendingTitleIndex + 1 : ''}，换其余4个）
+          <button class="btn btn-${hasSelected ? 'warning' : 'secondary'}" onclick="App.regenerateTitles()" id="btnRegenTitles"
+                  style="display:${hasTitles ? 'inline-flex' : 'none'}">
+            ${hasSelected ? `📌 保留已选的 #${this.state.titles.findIndex(t => t.title === this.state.selectedTitle) + 1}，重选其余4个` : '🔄 全部重新生成'}
           </button>
         </div>
 
@@ -1056,30 +1051,25 @@ ${current}
 
         <div id="titleList" class="title-list ${hasTitles ? '' : 'hidden'}">
           ${hasTitles ? this.state.titles.map((t, i) => {
-            const isPending = i === this.state.pendingTitleIndex;
+            const isSelected = this.state.selectedTitle === t.title;
             return `
-            <div class="title-card ${this.state.selectedTitle === t.title ? 'selected' : ''}"
+            <div class="title-card ${isSelected ? 'selected' : ''}"
                  onclick="App.selectTitle(${i})">
               <div class="title-index">#${i + 1}</div>
               <div class="title-content">
-                <div class="title-text">${t.title}${isPending ? ' <span class="pending-badge">📌 暂定</span>' : ''}</div>
+                <div class="title-text">${t.title}</div>
                 <div class="title-meta">
                   <span class="title-score">⭐ ${'★'.repeat(Math.round(t.score || 3))}${'☆'.repeat(5 - Math.round(t.score || 3))} (${t.score})</span>
                   ${t.note ? `<span class="title-note">${t.note}</span>` : ''}
                   ${t.title.length <= 20 ? '<span class="tag tag-short">📱 小红书适用</span>' : ''}
                 </div>
               </div>
-              <div class="title-actions-right">
-                <span class="title-check">${this.state.selectedTitle === t.title ? '✓' : ''}</span>
-                <button class="pending-btn ${isPending ? 'active' : ''}"
-                  onclick="event.stopPropagation();App.togglePendingTitle(${i})"
-                  title="${isPending ? '取消暂定' : '暂定备选'}">📌</button>
-              </div>
+              <div class="title-check">${isSelected ? '✓' : ''}</div>
             </div>`;
           }).join('') : ''}
         </div>
 
-        ${hasPending ? '<p class="text-light" style="font-size:0.82em;margin-top:4px">📌 已暂定的标题会保留，点「重新生成（保留暂定）」只换掉其他的</p>' : ''}
+        ${hasSelected ? '<p class="text-light" style="font-size:0.82em;margin-top:4px">📌 点击「保留已选的」按钮，选中的标题不动，其余4个重新生成</p>' : ''}
       </div>
     `;
   },
@@ -1130,7 +1120,6 @@ ${first500}
       const titles = LLM.parseJSON(fullText);
       this.state.titles = titles;
       this.state.selectedTitle = '';
-      this.state.pendingTitleIndex = -1; // 新生成时清空暂定
       this.renderStep5();
       this.updateFooter();
       // 显示「全部重新生成」按钮
@@ -1145,39 +1134,20 @@ ${first500}
   },
 
   selectTitle(index) {
-    this.state.selectedTitle = this.state.titles[index].title;
-    document.querySelectorAll('.title-card').forEach((c, i) => c.classList.toggle('selected', i === index));
-    document.querySelectorAll('.title-check').forEach((c, i) => { c.textContent = i === index ? '✓' : ''; });
-    this.updateFooter();
-  },
-
-  /** 暂定/取消暂定某个标题 */
-  togglePendingTitle(index) {
-    if (this.state.pendingTitleIndex === index) {
-      this.state.pendingTitleIndex = -1; // 取消暂定
+    const title = this.state.titles[index].title;
+    // 点击已选的 = 取消选择
+    if (this.state.selectedTitle === title) {
+      this.state.selectedTitle = '';
     } else {
-      this.state.pendingTitleIndex = index; // 设为暂定
+      this.state.selectedTitle = title;
     }
+    // 重新渲染步骤5 更新按钮状态
     this.renderStep5();
     this.updateFooter();
   },
 
-  /** 全部重新生成 5 个标题 */
-  async regenerateAllTitles() {
-    if (this.state.pendingTitleIndex >= 0) {
-      this.state.pendingTitleIndex = -1; // 有暂定时自动清除
-    }
-    await this.generateTitles();
-  },
-
-  /** 保留暂定标题，重新生成其他 4 个 */
-  async regenerateTitlesKeepPending() {
-    const keepIdx = this.state.pendingTitleIndex;
-    if (keepIdx < 0 || keepIdx >= this.state.titles.length) {
-      this.showStatus('请先暂定一个标题', 'warning');
-      return;
-    }
-    const kept = this.state.titles[keepIdx];
+  /** 重新生成标题：有已选则保留它，无已选则全部重来 */
+  async regenerateTitles() {
     const llmConfig = Config.getDefault('llm');
     if (!llmConfig) {
       this.showStatus('❌ 未配置 LLM API', 'error');
@@ -1186,11 +1156,12 @@ ${first500}
 
     const article = this.state.articleEdited || this.state.article;
     const first500 = article.substring(0, 500);
+    const keptTitle = this.state.selectedTitle;
+    const keptIndex = keptTitle ? this.state.titles.findIndex(t => t.title === keptTitle) : -1;
 
     document.getElementById('titleLoading').classList.remove('hidden');
     document.getElementById('btnGenTitles').disabled = true;
     document.getElementById('btnRegenTitles').disabled = true;
-    document.getElementById('btnRegenKeep').disabled = true;
 
     let fullText = '';
     try {
@@ -1208,11 +1179,10 @@ ${Config.KNOWLEDGE_BASE.style}
 4. 每个标题给出5分制评分和一句话评价
 5. 标题要多样化：一个偏文化典故、一个偏实用价值、一个偏情感共鸣、一个偏悬念反问
 6. 如果文章提到具体匠人，标题一定要体现匠人名字
-7. 以下已经有一个备选标题，请生成另外4个新标题，不要和已有的重复
+${keptTitle ? `7. 以下已有一个备选标题，请保留它，另外生成4个新标题：\n已保留的备选标题：${keptTitle}` : ''}
+${keptTitle ? '\n返回 JSON 数组（保持5项，把已保留的放在第一位）' : ''}
 
-已保留的备选标题：${kept.title}
-
-返回 JSON 数组（保持5项，把已保留的放在第一位），格式：
+返回 JSON 数组，格式：
 [{"title":"标题","score":4.5,"note":"评价"}]
 
 只返回 JSON，不要其他文字。`,
@@ -1220,29 +1190,26 @@ ${Config.KNOWLEDGE_BASE.style}
 
 ${first500}
 
-请生成 4 个新的标题方案，加上已保留的共5个。`),
+${keptTitle ? `请生成 4 个新的标题方案，加上已保留的「${keptTitle}」共5个。` : '请生成 5 个标题方案。'}`),
         chunk => { fullText += chunk; },
         { temperature: 0.9, max_tokens: 2048 }
       );
 
       const titles = LLM.parseJSON(fullText);
-      // 确保保留的标题在结果中
-      if (titles.length > 0 && titles[0].title !== kept.title) {
-        titles.unshift(kept);
+      if (keptTitle && titles.length > 0 && titles[0].title !== keptTitle) {
+        titles.unshift({ title: keptTitle, score: 5, note: '已保留的备选' });
       }
       this.state.titles = titles.slice(0, 5);
-      this.state.selectedTitle = '';
+      this.state.selectedTitle = keptTitle || '';  // 保留已选状态
       this.renderStep5();
       this.updateFooter();
-      this.showStatus('✅ 标题已更新，保留了你暂定的那个', 'success');
+      this.showStatus(keptTitle ? '✅ 标题已更新，保留了已选的' : '✅ 新一批标题已就绪', 'success');
     } catch (err) {
-      this.showStatus('❌ 标题重新生成失败：' + err.message, 'error');
+      this.showStatus('❌ 标题生成失败：' + err.message, 'error');
     } finally {
       document.getElementById('titleLoading').classList.add('hidden');
       document.getElementById('btnGenTitles').disabled = false;
       document.getElementById('btnRegenTitles').disabled = false;
-      const keepBtn = document.getElementById('btnRegenKeep');
-      if (keepBtn) keepBtn.disabled = false;
     }
   },
 
