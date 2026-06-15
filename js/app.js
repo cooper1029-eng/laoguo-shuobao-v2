@@ -1040,12 +1040,12 @@ ${current}
             🎯 生成标题方案
           </button>
           <button class="btn btn-secondary" onclick="App.regenerateAllTitles()" id="btnRegenTitles"
-                  style="display:${hasTitles ? 'inline-flex' : 'none'}">
+                  style="display:${hasTitles && !hasPending ? 'inline-flex' : 'none'}">
             🔄 全部重新生成
           </button>
-          <button class="btn btn-secondary" onclick="App.regenerateTitlesKeepPending()" id="btnRegenKeep"
+          <button class="btn btn-warning" onclick="App.regenerateTitlesKeepPending()" id="btnRegenKeep"
                   style="display:${hasPending ? 'inline-flex' : 'none'}">
-            📌 重新生成（保留暂定）
+            📌 重新生成（已暂定 #${hasPending ? this.state.pendingTitleIndex + 1 : ''}，换其余4个）
           </button>
         </div>
 
@@ -1164,7 +1164,9 @@ ${first500}
 
   /** 全部重新生成 5 个标题 */
   async regenerateAllTitles() {
-    this.state.pendingTitleIndex = -1;
+    if (this.state.pendingTitleIndex >= 0) {
+      this.state.pendingTitleIndex = -1; // 有暂定时自动清除
+    }
     await this.generateTitles();
   },
 
