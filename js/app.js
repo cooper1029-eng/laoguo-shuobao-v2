@@ -21,8 +21,11 @@ const App = {
     // 步骤5：标题
     titles: [],
     selectedTitle: '',
+    pendingTitleIndex: -1,   // 暂定的标题下标，-1=无暂定
     // 步骤6：配图
     imagePrompts: [],
+    promptChecked: [],        // 每个配图是否被勾选（用于单独重生成）
+    promptRefineText: '',     // 用户优化配图的输入文本
     // 步骤7：导出
     finalOutput: ''
   },
@@ -1024,16 +1027,27 @@ ${current}
   renderStep5() {
     const el = document.getElementById('mainContent');
     const hasTitles = this.state.titles.length > 0;
+    const hasPending = this.state.pendingTitleIndex >= 0;
     el.innerHTML = `
       <div class="step-panel">
         <div class="step-header">
           <h2>🏷️ 第五步：生成标题</h2>
-          <p class="step-desc">AI 根据正文生成 5 个备选标题，选定一个。</p>
+          <p class="step-desc">AI 根据正文生成 5 个备选标题，点击标题选定，点「暂定」留作备选。</p>
         </div>
 
-        <button class="btn btn-primary" onclick="App.generateTitles()" id="btnGenTitles">
-          🎯 生成标题方案
-        </button>
+        <div class="title-actions" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+          <button class="btn btn-primary" onclick="App.generateTitles()" id="btnGenTitles">
+            🎯 生成标题方案
+          </button>
+          <button class="btn btn-secondary" onclick="App.regenerateAllTitles()" id="btnRegenTitles"
+                  style="display:${hasTitles ? 'inline-flex' : 'none'}">
+            🔄 全部重新生成
+          </button>
+          <button class="btn btn-secondary" onclick="App.regenerateTitlesKeepPending()" id="btnRegenKeep"
+                  style="display:${hasPending ? 'inline-flex' : 'none'}">
+            📌 重新生成（保留暂定）
+          </button>
+        </div>
 
         <div id="titleLoading" class="topic-loading hidden">
           <div class="spinner"></div>
@@ -1041,22 +1055,31 @@ ${current}
         </div>
 
         <div id="titleList" class="title-list ${hasTitles ? '' : 'hidden'}">
-          ${hasTitles ? this.state.titles.map((t, i) => `
+          ${hasTitles ? this.state.titles.map((t, i) => {
+            const isPending = i === this.state.pendingTitleIndex;
+            return `
             <div class="title-card ${this.state.selectedTitle === t.title ? 'selected' : ''}"
                  onclick="App.selectTitle(${i})">
               <div class="title-index">#${i + 1}</div>
               <div class="title-content">
-                <div class="title-text">${t.title}</div>
+                <div class="title-text">${t.title}${isPending ? ' <span class="pending-badge">📌 暂定</span>' : ''}</div>
                 <div class="title-meta">
                   <span class="title-score">⭐ ${'★'.repeat(Math.round(t.score || 3))}${'☆'.repeat(5 - Math.round(t.score || 3))} (${t.score})</span>
                   ${t.note ? `<span class="title-note">${t.note}</span>` : ''}
                   ${t.title.length <= 20 ? '<span class="tag tag-short">📱 小红书适用</span>' : ''}
                 </div>
               </div>
-              <div class="title-check">${this.state.selectedTitle === t.title ? '✓' : ''}</div>
-            </div>
-          `).join('') : ''}
+              <div class="title-actions-right">
+                <span class="title-check">${this.state.selectedTitle === t.title ? '✓' : ''}</span>
+                <button class="pending-btn ${isPending ? 'active' : ''}"
+                  onclick="event.stopPropagation();App.togglePendingTitle(${i})"
+                  title="${isPending ? '取消暂定' : '暂定备选'}">📌</button>
+              </div>
+            </div>`;
+          }).join('') : ''}
         </div>
+
+        ${hasPending ? '<p class="text-light" style="font-size:0.82em;margin-top:4px">📌 已暂定的标题会保留，点「重新生成（保留暂定）」只换掉其他的</p>' : ''}
       </div>
     `;
   },
@@ -1107,8 +1130,12 @@ ${first500}
       const titles = LLM.parseJSON(fullText);
       this.state.titles = titles;
       this.state.selectedTitle = '';
+      this.state.pendingTitleIndex = -1; // 新生成时清空暂定
       this.renderStep5();
       this.updateFooter();
+      // 显示「全部重新生成」按钮
+      const regenBtn = document.getElementById('btnRegenTitles');
+      if (regenBtn) regenBtn.style.display = 'inline-flex';
     } catch (err) {
       this.showStatus('❌ 标题生成失败：' + err.message, 'error');
     } finally {
@@ -1124,20 +1151,124 @@ ${first500}
     this.updateFooter();
   },
 
+  /** 暂定/取消暂定某个标题 */
+  togglePendingTitle(index) {
+    if (this.state.pendingTitleIndex === index) {
+      this.state.pendingTitleIndex = -1; // 取消暂定
+    } else {
+      this.state.pendingTitleIndex = index; // 设为暂定
+    }
+    this.renderStep5();
+    this.updateFooter();
+  },
+
+  /** 全部重新生成 5 个标题 */
+  async regenerateAllTitles() {
+    this.state.pendingTitleIndex = -1;
+    await this.generateTitles();
+  },
+
+  /** 保留暂定标题，重新生成其他 4 个 */
+  async regenerateTitlesKeepPending() {
+    const keepIdx = this.state.pendingTitleIndex;
+    if (keepIdx < 0 || keepIdx >= this.state.titles.length) {
+      this.showStatus('请先暂定一个标题', 'warning');
+      return;
+    }
+    const kept = this.state.titles[keepIdx];
+    const llmConfig = Config.getDefault('llm');
+    if (!llmConfig) {
+      this.showStatus('❌ 未配置 LLM API', 'error');
+      return;
+    }
+
+    const article = this.state.articleEdited || this.state.article;
+    const first500 = article.substring(0, 500);
+
+    document.getElementById('titleLoading').classList.remove('hidden');
+    document.getElementById('btnGenTitles').disabled = true;
+    document.getElementById('btnRegenTitles').disabled = true;
+    document.getElementById('btnRegenKeep').disabled = true;
+
+    let fullText = '';
+    try {
+      await LLM.chatStream(
+        llmConfig,
+        LLM.msgs(`你是老郭说宝的标题策划专家。熟知建水紫陶行业和「老郭说宝」的风格。
+
+老郭的写作风格：
+${Config.KNOWLEDGE_BASE.style}
+
+要求：
+1. 标题要吸引人、有传播力，体现老郭的幽默大气风格
+2. 至少1个不超过20字（小红书适用）
+3. 标题要基于文章真实内容，不夸大不虚构
+4. 每个标题给出5分制评分和一句话评价
+5. 标题要多样化：一个偏文化典故、一个偏实用价值、一个偏情感共鸣、一个偏悬念反问
+6. 如果文章提到具体匠人，标题一定要体现匠人名字
+7. 以下已经有一个备选标题，请生成另外4个新标题，不要和已有的重复
+
+已保留的备选标题：${kept.title}
+
+返回 JSON 数组（保持5项，把已保留的放在第一位），格式：
+[{"title":"标题","score":4.5,"note":"评价"}]
+
+只返回 JSON，不要其他文字。`,
+`以下是文章开头：
+
+${first500}
+
+请生成 4 个新的标题方案，加上已保留的共5个。`),
+        chunk => { fullText += chunk; },
+        { temperature: 0.9, max_tokens: 2048 }
+      );
+
+      const titles = LLM.parseJSON(fullText);
+      // 确保保留的标题在结果中
+      if (titles.length > 0 && titles[0].title !== kept.title) {
+        titles.unshift(kept);
+      }
+      this.state.titles = titles.slice(0, 5);
+      this.state.selectedTitle = '';
+      this.renderStep5();
+      this.updateFooter();
+      this.showStatus('✅ 标题已更新，保留了你暂定的那个', 'success');
+    } catch (err) {
+      this.showStatus('❌ 标题重新生成失败：' + err.message, 'error');
+    } finally {
+      document.getElementById('titleLoading').classList.add('hidden');
+      document.getElementById('btnGenTitles').disabled = false;
+      document.getElementById('btnRegenTitles').disabled = false;
+      const keepBtn = document.getElementById('btnRegenKeep');
+      if (keepBtn) keepBtn.disabled = false;
+    }
+  },
+
   // ---------- 步骤6：配图提示词 ----------
   renderStep6() {
     const el = document.getElementById('mainContent');
     const hasPrompts = this.state.imagePrompts.length > 0;
+    const hasChecked = this.state.promptChecked.some(c => c);
     el.innerHTML = `
       <div class="step-panel">
         <div class="step-header">
           <h2>🎨 第六步：配图提示词</h2>
-          <p class="step-desc">AI 根据文章内容生成 6-10 张配图提示词，用于文生图。</p>
+          <p class="step-desc">AI 根据文章内容生成 8 张配图提示词，用于文生图。</p>
         </div>
 
-        <button class="btn btn-primary" onclick="App.generateImagePrompts()" id="btnGenPrompts">
-          🖼️ 生成配图提示词
-        </button>
+        <div class="prompt-actions" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+          <button class="btn btn-primary" onclick="App.generateImagePrompts()" id="btnGenPrompts">
+            🖼️ 生成配图提示词
+          </button>
+          <button class="btn btn-secondary" onclick="App.regenerateSelectedPrompts()" id="btnRegenPrompts"
+                  style="display:${hasChecked ? 'inline-flex' : 'none'}">
+            🔄 重新生成勾选的
+          </button>
+          <button class="btn btn-secondary" onclick="App.showPromptRefineDialog()" id="btnPromptRefine"
+                  style="display:${hasPrompts ? 'inline-flex' : 'none'}">
+            💬 与 AI 沟通优化
+          </button>
+        </div>
 
         <div id="promptLoading" class="topic-loading hidden">
           <div class="spinner"></div>
@@ -1146,6 +1277,28 @@ ${first500}
 
         <div id="promptTable" class="${hasPrompts ? '' : 'hidden'}">
           ${hasPrompts ? this.renderPromptTable() : ''}
+        </div>
+      </div>
+
+      <!-- AI 对话优化对话框 -->
+      <div id="promptRefineModal" class="modal hidden">
+        <div class="modal-overlay" onclick="App.closeModal('promptRefineModal')"></div>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>💬 与 AI 沟通配图优化</h2>
+            <button class="modal-close" onclick="App.closeModal('promptRefineModal')">✕</button>
+          </div>
+          <div class="modal-body" style="padding:20px">
+            <p class="text-light" style="margin-bottom:12px;font-size:0.85em">
+              告诉 AI 你希望配图提示词怎么改进。例如：风格统一为水墨画、加入更多茶文化元素、画面更简洁等。
+            </p>
+            <textarea id="promptRefineInput" class="feedback-input"
+              placeholder="例如：&#10;- 风格统一为中国水墨画风&#10;- 每张都加入茶具或茶叶元素&#10;- 画面更简洁留白多一点&#10;- 去掉过于抽象的意象">${this.state.promptRefineText}</textarea>
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <button class="btn btn-primary" onclick="App.submitPromptRefine()">✨ 应用优化并重新生成</button>
+              <button class="btn btn-secondary" onclick="App.closeModal('promptRefineModal')">取消</button>
+            </div>
+          </div>
         </div>
       </div>
     `;
@@ -1194,6 +1347,8 @@ ${article.substring(0, 1500)}
 
       const prompts = LLM.parseJSON(fullText);
       this.state.imagePrompts = prompts;
+      this.state.promptChecked = prompts.map(() => false); // 所有未勾选
+      this.state.promptRefineText = ''; // 清空优化文本
       this.renderStep6();
       this.updateFooter();
     } catch (err) {
@@ -1207,19 +1362,240 @@ ${article.substring(0, 1500)}
   renderPromptTable() {
     const prompts = this.state.imagePrompts;
     if (!prompts || prompts.length === 0) return '';
+    // 确保 promptChecked 长度一致
+    while (this.state.promptChecked.length < prompts.length) {
+      this.state.promptChecked.push(false);
+    }
     let html = `<div class="prompt-list">`;
     prompts.forEach((p, i) => {
+      const isChecked = this.state.promptChecked[i] || false;
       const parts = [p.scene || ''];
       if (p.style) parts.push(`风格参考：${p.style}`);
       if (p.ref) parts.push(`参考：${p.ref}`);
       parts.push('9:16竖版');
-      html += `<div class="prompt-item" style="padding:10px 14px;margin-bottom:8px;border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--bg-card);font-size:0.88em;line-height:1.6;">
-        <span style="font-weight:600;color:var(--primary);margin-right:6px;">#${i + 1}</span>
-        ${parts.map(s => `<span>${s}</span>`).join('，')}
+      html += `<div class="prompt-item ${isChecked ? 'checked' : ''}" style="padding:10px 14px;margin-bottom:8px;border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--bg-card);font-size:0.88em;line-height:1.6;display:flex;align-items:flex-start;gap:10px;">
+        <label class="prompt-checkbox" onclick="event.stopPropagation()" style="display:flex;align-items:center;gap:4px;cursor:pointer;margin-top:2px;flex-shrink:0;">
+          <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="App.togglePromptCheck(${i})" style="width:16px;height:16px;cursor:pointer;">
+        </label>
+        <div style="flex:1">
+          <span style="font-weight:600;color:var(--primary);margin-right:6px;">#${i + 1}</span>
+          ${parts.map(s => `<span>${s}</span>`).join('，')}
+        </div>
       </div>`;
     });
     html += `</div>`;
     return html;
+  },
+
+  /** 勾选/取消配图提示词 */
+  togglePromptCheck(index) {
+    this.state.promptChecked[index] = !this.state.promptChecked[index];
+    // 更新按钮显隐
+    const hasChecked = this.state.promptChecked.some(c => c);
+    const regenBtn = document.getElementById('btnRegenPrompts');
+    if (regenBtn) regenBtn.style.display = hasChecked ? 'inline-flex' : 'none';
+    // 更新卡片高亮
+    const items = document.querySelectorAll('.prompt-item');
+    if (items[index]) items[index].classList.toggle('checked');
+  },
+
+  /** 重新生成勾选的配图提示词 */
+  async regenerateSelectedPrompts() {
+    const checkedIndices = [];
+    this.state.promptChecked.forEach((c, i) => { if (c) checkedIndices.push(i); });
+    if (checkedIndices.length === 0) {
+      this.showStatus('请先勾选要重新生成的提示词', 'warning');
+      return;
+    }
+
+    const llmConfig = Config.getDefault('llm');
+    if (!llmConfig) {
+      this.showStatus('❌ 未配置 LLM API', 'error');
+      return;
+    }
+
+    const title = this.state.selectedTitle || '建水紫陶';
+    const article = this.state.articleEdited || this.state.article;
+    const prompts = this.state.imagePrompts;
+
+    // 构造需要重新生成的上下文
+    const toRegen = checkedIndices.map(i =>
+      `#${i + 1}：场景「${prompts[i].scene || ''}」风格「${prompts[i].style || ''}」参考「${prompts[i].ref || ''}」`
+    ).join('\n');
+
+    // 保留不需要重生成的
+    const keepInfo = prompts.filter((_, i) => !this.state.promptChecked[i])
+      .map((p, idx) => {
+        const origIdx = prompts.findIndex(x => x === p);
+        return `#${origIdx + 1}：${p.scene || ''}（保留不变）`;
+      }).join('\n');
+
+    const refineHint = this.state.promptRefineText
+      ? `\n\n用户的优化要求：${this.state.promptRefineText}` : '';
+
+    document.getElementById('promptLoading').classList.remove('hidden');
+    document.getElementById('btnGenPrompts').disabled = true;
+    document.getElementById('btnRegenPrompts').disabled = true;
+    document.getElementById('btnPromptRefine').disabled = true;
+
+    let fullText = '';
+    try {
+      await LLM.chatStream(
+        llmConfig,
+        LLM.msgs(`你是老郭说宝的配图策划师。根据文章内容重新生成部分配图提示词。
+
+要求：
+1. 每张提示词包含：画面内容、风格参考、画幅标注
+2. 画幅统一标注 "9:16竖版"
+3. 每张末尾加 "9:16竖版" 字样
+4. 产品本身不需要配图（已有实物照片），配图用于辅助场景意境
+5. 画面要有审美、有意境，适合文生图模型
+6. 以下列出需要重新生成的原提示词，请参考其序号和原意改写优化
+7. 未列出的提示词保持原样，不要改动${refineHint}
+
+返回 JSON 数组（保持总数不变，只修改需要重新生成的项），格式：
+[{"scene":"画面内容描述","style":"风格参考，如中国风、水墨、工笔","ref":"参考艺术家或风格"}, ...]
+
+只返回 JSON，不要其他文字。`,
+`文章标题：${title}
+
+文章内容：
+${article.substring(0, 1500)}
+
+需要重新生成的提示词：
+${toRegen}
+
+保持不变的提示词：
+${keepInfo}
+
+请返回全部 ${prompts.length} 项（修改需要改的，保留不需要改的）。`),
+        chunk => { fullText += chunk; },
+        { temperature: 0.85, max_tokens: 4096 }
+      );
+
+      const newPrompts = LLM.parseJSON(fullText);
+      // 只替换勾选的项
+      if (Array.isArray(newPrompts) && newPrompts.length === prompts.length) {
+        this.state.imagePrompts = newPrompts;
+      } else {
+        // 如果返回数量不对，只替换勾选位置的 scene/style/ref
+        checkedIndices.forEach(idx => {
+          if (newPrompts[idx]) {
+            prompts[idx].scene = newPrompts[idx].scene || prompts[idx].scene;
+            prompts[idx].style = newPrompts[idx].style || prompts[idx].style;
+            prompts[idx].ref = newPrompts[idx].ref || prompts[idx].ref;
+          }
+        });
+      }
+      // 清空勾选
+      this.state.promptChecked = this.state.imagePrompts.map(() => false);
+      this.renderStep6();
+      this.updateFooter();
+      this.showStatus('✅ 配图提示词已更新', 'success');
+    } catch (err) {
+      this.showStatus('❌ 配图提示词生成失败：' + err.message, 'error');
+    } finally {
+      document.getElementById('promptLoading').classList.add('hidden');
+      document.getElementById('btnGenPrompts').disabled = false;
+      const regenBtn = document.getElementById('btnRegenPrompts');
+      if (regenBtn) { regenBtn.disabled = false; regenBtn.style.display = 'none'; }
+      const refineBtn = document.getElementById('btnPromptRefine');
+      if (refineBtn) refineBtn.disabled = false;
+    }
+  },
+
+  /** 打开配图优化对话窗口 */
+  showPromptRefineDialog() {
+    document.getElementById('promptRefineInput').value = this.state.promptRefineText;
+    this.openModal('promptRefineModal');
+    setTimeout(() => document.getElementById('promptRefineInput')?.focus(), 100);
+  },
+
+  /** 提交配图优化要求并重新生成全部 */
+  async submitPromptRefine() {
+    const refineText = document.getElementById('promptRefineInput').value.trim();
+    if (!refineText) {
+      this.showStatus('请先写下你的优化要求', 'warning');
+      return;
+    }
+    this.state.promptRefineText = refineText;
+    this.closeModal('promptRefineModal');
+
+    const llmConfig = Config.getDefault('llm');
+    if (!llmConfig) {
+      this.showStatus('❌ 未配置 LLM API', 'error');
+      return;
+    }
+
+    const title = this.state.selectedTitle || '建水紫陶';
+    const article = this.state.articleEdited || this.state.article;
+    const existingPrompts = this.state.imagePrompts;
+
+    // 把现有提示词也传给 AI，让它在原有基础上优化
+    const existingText = existingPrompts.map((p, i) =>
+      `#${i + 1} 场景：${p.scene || ''}，风格：${p.style || ''}，参考：${p.ref || ''}`
+    ).join('\n');
+
+    document.getElementById('promptLoading').classList.remove('hidden');
+    document.getElementById('btnGenPrompts').disabled = true;
+    const regenBtn = document.getElementById('btnRegenPrompts');
+    if (regenBtn) regenBtn.disabled = true;
+    const refineBtn = document.getElementById('btnPromptRefine');
+    if (refineBtn) refineBtn.disabled = true;
+
+    let fullText = '';
+    try {
+      await LLM.chatStream(
+        llmConfig,
+        LLM.msgs(`你是老郭说宝的配图策划师。用户对现有的配图提示词不满意，提出了优化要求。
+请根据文章内容和用户要求，重新生成全部配图提示词。
+
+要求：
+1. 每张提示词包含：画面内容、风格参考、画幅标注
+2. 画幅统一标注 "9:16竖版"
+3. 每张末尾加 "9:16竖版" 字样
+4. 产品本身不需要配图（已有实物照片），配图用于辅助场景意境
+5. 画面要有审美、有意境，适合文生图模型
+6. 在原有提示词基础上优化，不要完全脱离原有风格
+
+用户的优化要求：
+${refineText}
+
+返回 JSON 数组，格式：
+[{"scene":"画面内容描述","style":"风格参考，如中国风、水墨、工笔","ref":"参考艺术家或风格"}, ...]
+
+只返回 JSON，不要其他文字。`,
+`文章标题：${title}
+
+文章内容：
+${article.substring(0, 1500)}
+
+现有配图提示词（请在此基础上优化）：
+${existingText}
+
+用户的优化要求：${refineText}
+
+请生成 ${existingPrompts.length} 张配图提示词。`),
+        chunk => { fullText += chunk; },
+        { temperature: 0.85, max_tokens: 4096 }
+      );
+
+      const newPrompts = LLM.parseJSON(fullText);
+      this.state.imagePrompts = newPrompts;
+      this.state.promptChecked = newPrompts.map(() => false);
+      this.renderStep6();
+      this.updateFooter();
+      this.showStatus('✅ 配图提示词已按照你的要求优化', 'success');
+    } catch (err) {
+      this.showStatus('❌ 配图优化失败：' + err.message, 'error');
+    } finally {
+      document.getElementById('promptLoading').classList.add('hidden');
+      document.getElementById('btnGenPrompts').disabled = false;
+      const regenBtn2 = document.getElementById('btnRegenPrompts');
+      if (regenBtn2) regenBtn2.disabled = false;
+      const refineBtn2 = document.getElementById('btnPromptRefine');
+      if (refineBtn2) refineBtn2.disabled = false;
+    }
   },
 
   // ---------- 步骤7：导出 ----------
