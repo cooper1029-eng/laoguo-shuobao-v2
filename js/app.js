@@ -1222,7 +1222,7 @@ ${keptTitle ? `请生成 4 个新的标题方案，加上已保留的「${keptTi
       <div class="step-panel">
         <div class="step-header">
           <h2>🎨 第六步：配图提示词</h2>
-          <p class="step-desc">AI 根据文章内容生成 8 张配图提示词，用于文生图。</p>
+          <p class="step-desc">AI 根据文章内容生成 7 张场景配图 + 1 张封面提示词（从标题提炼≤15字渲染在封面之上）。</p>
         </div>
 
         <div class="prompt-actions" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
@@ -1293,15 +1293,22 @@ ${keptTitle ? `请生成 4 个新的标题方案，加上已保留的「${keptTi
         LLM.msgs(`你是老郭说宝的配图策划师。根据文章内容生成 8 张配图提示词。
 
 要求：
-1. 每张提示词包含：画面内容、风格参考、画幅标注
-2. 画幅统一标注 "9:16竖版"
-3. 每张末尾加 "9:16竖版" 字样
-4. 提示词按文章叙事顺序排列
-5. 产品本身不需要配图（已有实物照片），配图用于辅助场景意境
-6. 画面要有审美、有意境，适合文生图模型
+1. 第1张是封面提示词：① 从标题提炼不超过15字的封面文字（title_text）；② scene 要描述与文章核心内容紧密相关的画面作为封面视觉主体，标题文字以书法/艺术字体叠印或镶嵌在这个画面之上（文字是点睛，画面根植于文章）
+2. 第2-8张是场景配图提示词，按文章叙事顺序排列
+3. 每张提示词包含：画面内容、风格参考、画幅标注
+4. 画幅统一标注 "9:16竖版"
+5. 每张末尾加 "9:16竖版" 字样
+6. 产品本身不需要配图（已有实物照片），配图用于辅助场景意境
+7. 画面要有审美、有意境，适合文生图模型
+8. 所有 8 张提示词（含封面）的灵感都必须来源于文章内容，封面不能脱离文章凭空创作
 
 返回 JSON 数组，格式：
-[{"scene":"画面内容描述","style":"风格参考，如中国风、水墨、工笔","ref":"参考艺术家或风格"}, ...]
+[{"scene":"画面内容描述","style":"风格参考，如中国风、水墨、工笔","ref":"参考艺术家或风格","title_text":"封面提炼文字"}, ...]
+
+注意：
+- 第1项的 title_text 为从标题提炼出的封面文字（不超过15字）
+- 第1项的 scene 要描绘一个与文章核心内容相关的画面作为封面视觉主体（例如文章讲火皮对比，封面就做一半火皮一半素面的陶器为主体），标题文字叠印其上；不能脱离文章只做纯书法渲染
+- 第2-8项的 title_text 可省略或留空
 
 只返回 JSON，不要其他文字。`,
 `文章标题：${title}
@@ -1309,7 +1316,7 @@ ${keptTitle ? `请生成 4 个新的标题方案，加上已保留的「${keptTi
 文章内容：
 ${article.substring(0, 1500)}
 
-请生成 8 张配图提示词。`),
+请生成 8 张配图提示词。第1张为封面提示词：scene 要描绘与文章相关的画面作为视觉主体（不可脱离文章凭空创作），标题文字叠印其上，提炼≤15字的封面文字放在 title_text 字段。第2-8张是场景配图。`),
         chunk => { fullText += chunk; },
         { temperature: 0.85, max_tokens: 4096 }
       );
@@ -1338,17 +1345,26 @@ ${article.substring(0, 1500)}
     let html = `<div class="prompt-list">`;
     prompts.forEach((p, i) => {
       const isChecked = this.state.promptChecked[i] || false;
+      const isCover = i === 0 && p.title_text;
       const parts = [p.scene || ''];
       if (p.style) parts.push(`风格参考：${p.style}`);
       if (p.ref) parts.push(`参考：${p.ref}`);
       parts.push('9:16竖版');
-      html += `<div class="prompt-item ${isChecked ? 'checked' : ''}" style="padding:10px 14px;margin-bottom:8px;border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--bg-card);font-size:0.88em;line-height:1.6;display:flex;align-items:flex-start;gap:10px;">
+      const badge = isCover
+        ? `<span style="background:var(--primary);color:#fff;font-size:0.75em;padding:1px 8px;border-radius:8px;margin-right:6px;font-weight:600;">封面</span>`
+        : '';
+      const titleLine = isCover
+        ? `<div style="margin-top:4px;font-size:0.95em;color:var(--primary);font-weight:600;">📌 ${p.title_text}</div>`
+        : '';
+      html += `<div class="prompt-item ${isChecked ? 'checked' : ''} ${isCover ? 'cover-item' : ''}" style="padding:10px 14px;margin-bottom:8px;border:1px solid ${isCover ? 'var(--primary)' : 'var(--border-light)'};border-radius:var(--radius-sm);background:var(--bg-card);font-size:0.88em;line-height:1.6;display:flex;align-items:flex-start;gap:10px;">
         <label class="prompt-checkbox" onclick="event.stopPropagation()" style="display:flex;align-items:center;gap:4px;cursor:pointer;margin-top:2px;flex-shrink:0;">
           <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="App.togglePromptCheck(${i})" style="width:16px;height:16px;cursor:pointer;">
         </label>
         <div style="flex:1">
-          <span style="font-weight:600;color:var(--primary);margin-right:6px;">#${i + 1}</span>
+          <span style="font-weight:600;color:var(--primary);margin-right:4px;">#${i + 1}</span>
+          ${badge}
           ${parts.map(s => `<span>${s}</span>`).join('，')}
+          ${titleLine}
         </div>
       </div>`;
     });
@@ -1388,15 +1404,19 @@ ${article.substring(0, 1500)}
     const prompts = this.state.imagePrompts;
 
     // 构造需要重新生成的上下文
-    const toRegen = checkedIndices.map(i =>
-      `#${i + 1}：场景「${prompts[i].scene || ''}」风格「${prompts[i].style || ''}」参考「${prompts[i].ref || ''}」`
-    ).join('\n');
+    const toRegen = checkedIndices.map(i => {
+      let info = `#${i + 1}：场景「${prompts[i].scene || ''}」风格「${prompts[i].style || ''}」参考「${prompts[i].ref || ''}」`;
+      if (prompts[i].title_text) info += ` 封面文字「${prompts[i].title_text}」`;
+      return info;
+    }).join('\n');
 
     // 保留不需要重生成的
-    const keepInfo = prompts.filter((_, i) => !this.state.promptChecked[i])
-      .map((p, idx) => {
-        const origIdx = prompts.findIndex(x => x === p);
-        return `#${origIdx + 1}：${p.scene || ''}（保留不变）`;
+    const keepPairs = prompts.map((p, i) => ({ p, i }));
+    const keepInfo = keepPairs.filter(({ i }) => !this.state.promptChecked[i])
+      .map(({ p, i }) => {
+        let info = `#${i + 1}：${p.scene || ''}（保留不变）`;
+        if (p.title_text) info += ` 封面文字「${p.title_text}」`;
+        return info;
       }).join('\n');
 
     const refineHint = this.state.promptRefineText
@@ -1421,9 +1441,11 @@ ${article.substring(0, 1500)}
 5. 画面要有审美、有意境，适合文生图模型
 6. 以下列出需要重新生成的原提示词，请参考其序号和原意改写优化
 7. 未列出的提示词保持原样，不要改动${refineHint}
+8. 第1张如果是封面提示词，scene 要描绘与文章相关的画面作为视觉主体（不可脱离文章凭空创作），标题文字叠印其上；必须保留 title_text 字段（封面提炼文字，不超过15字）
+9. 所有提示词（含封面）的灵感都必须来源于文章内容
 
 返回 JSON 数组（保持总数不变，只修改需要重新生成的项），格式：
-[{"scene":"画面内容描述","style":"风格参考，如中国风、水墨、工笔","ref":"参考艺术家或风格"}, ...]
+[{"scene":"画面内容描述","style":"风格参考，如中国风、水墨、工笔","ref":"参考艺术家或风格","title_text":"封面提炼文字"}, ...]
 
 只返回 JSON，不要其他文字。`,
 `文章标题：${title}
@@ -1447,12 +1469,13 @@ ${keepInfo}
       if (Array.isArray(newPrompts) && newPrompts.length === prompts.length) {
         this.state.imagePrompts = newPrompts;
       } else {
-        // 如果返回数量不对，只替换勾选位置的 scene/style/ref
+        // 如果返回数量不对，只替换勾选位置的 scene/style/ref/title_text
         checkedIndices.forEach(idx => {
           if (newPrompts[idx]) {
             prompts[idx].scene = newPrompts[idx].scene || prompts[idx].scene;
             prompts[idx].style = newPrompts[idx].style || prompts[idx].style;
             prompts[idx].ref = newPrompts[idx].ref || prompts[idx].ref;
+            if (newPrompts[idx].title_text) prompts[idx].title_text = newPrompts[idx].title_text;
           }
         });
       }
@@ -1501,9 +1524,11 @@ ${keepInfo}
     const existingPrompts = this.state.imagePrompts;
 
     // 把现有提示词也传给 AI，让它在原有基础上优化
-    const existingText = existingPrompts.map((p, i) =>
-      `#${i + 1} 场景：${p.scene || ''}，风格：${p.style || ''}，参考：${p.ref || ''}`
-    ).join('\n');
+    const existingText = existingPrompts.map((p, i) => {
+      let info = `#${i + 1} 场景：${p.scene || ''}，风格：${p.style || ''}，参考：${p.ref || ''}`;
+      if (p.title_text) info += `，封面文字：${p.title_text}`;
+      return info;
+    }).join('\n');
 
     document.getElementById('promptLoading').classList.remove('hidden');
     document.getElementById('btnGenPrompts').disabled = true;
@@ -1526,12 +1551,14 @@ ${keepInfo}
 4. 产品本身不需要配图（已有实物照片），配图用于辅助场景意境
 5. 画面要有审美、有意境，适合文生图模型
 6. 在原有提示词基础上优化，不要完全脱离原有风格
+7. 第1张如果是封面提示词，scene 要描绘与文章相关的画面作为视觉主体（不可脱离文章凭空创作），标题文字叠印其上；必须保留并优化 title_text 字段（封面提炼文字，不超过15字）
+8. 所有提示词（含封面）的灵感都必须来源于文章内容
 
 用户的优化要求：
 ${refineText}
 
 返回 JSON 数组，格式：
-[{"scene":"画面内容描述","style":"风格参考，如中国风、水墨、工笔","ref":"参考艺术家或风格"}, ...]
+[{"scene":"画面内容描述","style":"风格参考，如中国风、水墨、工笔","ref":"参考艺术家或风格","title_text":"封面提炼文字"}, ...]
 
 只返回 JSON，不要其他文字。`,
 `文章标题：${title}
@@ -1544,7 +1571,7 @@ ${existingText}
 
 用户的优化要求：${refineText}
 
-请生成 ${existingPrompts.length} 张配图提示词。`),
+请生成 ${existingPrompts.length} 张配图提示词。第1张为封面提示词：scene 要描绘与文章相关的画面作为视觉主体（不可脱离文章凭空创作），标题文字叠印其上，必须包含 title_text 字段。`),
         chunk => { fullText += chunk; },
         { temperature: 0.85, max_tokens: 4096 }
       );
@@ -1579,11 +1606,20 @@ ${existingText}
     if (prompts && prompts.length > 0) {
       output += `\n## 配图提示词\n\n`;
       prompts.forEach((p, i) => {
-        let line = `${i + 1}. ${p.scene || ''}`;
-        if (p.style) line += `，风格参考：${p.style}`;
-        if (p.ref) line += `，参考：${p.ref}`;
-        line += `，9:16竖版`;
-        output += line + `\n\n`;
+        const isCover = i === 0 && p.title_text;
+        if (isCover) {
+          // 封面提示词：突出显示标题文字
+          output += `**封面** — ${p.scene || ''}`;
+          if (p.style) output += `，风格参考：${p.style}`;
+          if (p.ref) output += `，参考：${p.ref}`;
+          output += `，9:16竖版\n> 封面文字：**${p.title_text}**\n\n`;
+        } else {
+          let line = `${i + 1}. ${p.scene || ''}`;
+          if (p.style) line += `，风格参考：${p.style}`;
+          if (p.ref) line += `，参考：${p.ref}`;
+          line += `，9:16竖版`;
+          output += line + `\n\n`;
+        }
       });
     }
     this.state.finalOutput = output;
