@@ -1317,3 +1317,59 @@ body {
   .export-actions { flex-direction: column; }
   .header-top button { margin-left: 0 !important; }
 }
+
+/* ===== Obsidian 知识库设置面板 ===== */
+.obsidian-kb-section {
+  padding: 4px 0;
+}
+.kb-folder-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+.kb-folder-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--primary-bg);
+  border-radius: var(--radius-sm);
+  font-size: 0.9em;
+}
+.kb-folder-item.kb-error {
+  background: var(--error-bg);
+}
+.kb-folder-icon {
+  font-size: 1.1em;
+}
+.kb-folder-name {
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-folder-count {
+  color: var(--text-secondary);
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+.kb-folder-error {
+  color: var(--error);
+  font-size: 0.85em;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-summary {
+  margin: 8px 0 0;
+  font-size: 0.88em;
+  color: var(--text-secondary);
+}
+.kb-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}

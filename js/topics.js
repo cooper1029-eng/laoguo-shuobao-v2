@@ -9,6 +9,11 @@ const Topics = {
 
   /** 推荐系统 prompt */
   buildSystemPrompt() {
+    // 优先使用 Obsidian 知识库的已写方向，回退到硬编码
+    const coveredList = (typeof ObsidianKB !== 'undefined' && ObsidianKB.hasArticles())
+      ? ObsidianKB.buildCoveredList()
+      : Config.KNOWLEDGE_BASE.covered;
+
     return `你是建水紫陶内容策划专家「老郭说宝」的选题助手。
 
 老郭的知识体系：
@@ -18,7 +23,7 @@ ${Config.KNOWLEDGE_BASE.zitao}
 ${Config.KNOWLEDGE_BASE.style}
 
 老郭已经写过的方向（避免重复）：
-${Config.KNOWLEDGE_BASE.covered}
+${coveredList}
 
 你的任务：每次推荐 10 个选题。
 

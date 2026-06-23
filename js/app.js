@@ -46,6 +46,18 @@ const App = {
     this.renderStep();
     this.loadInspirationDraft();
     this.loadDraft(); // 恢复上一次的工作进度
+    // 初始化 Obsidian 知识库（异步，不影响界面渲染）
+    ObsidianKB.init().then(() => {
+      // 如果有文章，在状态栏显示提示
+      if (ObsidianKB.hasArticles()) {
+        this.showStatus('📖 知识库已加载：' + ObsidianKB.getStatus(), 'success');
+      }
+      // 更新设置面板中的知识库状态（如果已打开）
+      const panel = document.getElementById('settingsPanel');
+      if (panel && !panel.classList.contains('hidden')) {
+        this.renderSettings();
+      }
+    });
   },
 
   // ====================== UI 骨架 ======================
@@ -701,7 +713,6 @@ const App = {
       market: '市场观察'
     };
 
-    const examples = this.getFewShotArticles();
     const editFeedback = this.getEditFeedback();
 
     return `你是一位建水紫陶内容创作者「老郭说宝」。请根据以下信息写一篇口播文稿。
@@ -743,11 +754,10 @@ ${Config.KNOWLEDGE_BASE.zitao}
 【风格指南（必须严格遵守）】
 ${Config.KNOWLEDGE_BASE.style}
 
-【已写过的方向（避免重复）】
-${Config.KNOWLEDGE_BASE.covered}
+${this._buildCoveredSection()}
 
 ${editFeedback ? `【历史修改经验（本次写作要特别注意）】\n${editFeedback}\n` : ''}
-${examples ? `【参考示例（模仿其文风和结构）】\n${examples}\n` : ''}
+${this._buildExamplesSection()}
 
 ## 严禁事项（必须遵守）
 1. 禁止编造不存在的匠人姓名（如"李师傅""王老师"等），只提已知的真实作者
@@ -759,6 +769,108 @@ ${examples ? `【参考示例（模仿其文风和结构）】\n${examples}\n` :
 7. 不要输出标题，不要输出配图提示词，不要输出其他说明——直接输出正文
 
 请直接输出正文。`;
+  },
+
+  /** 构建「已写方向」段落：优先用 Obsidian 知识库，回退到硬编码 */
+  _buildCoveredSection() {
+    if (ObsidianKB.hasArticles()) {
+      const covered = ObsidianKB.buildCoveredList();
+      return `【已写过的方向（基于 Obsidian 归档，避免重复）】\n${covered}`;
+    }
+    return `【已写过的方向（避免重复）】\n${Config.KNOWLEDGE_BASE.covered}`;
+  },
+
+  /** 构建 few-shot 示例段落：优先用 Obsidian 归档文章，回退到 localStorage 历史 */
+  _buildExamplesSection() {
+    if (ObsidianKB.hasArticles()) {
+      const examples = ObsidianKB.getFewShotArticles(4);
+      if (examples) {
+        return `【风格参考 — 仔细阅读以下归档文章，严格模仿其风格】
+以下是你之前写的文章（已从 Obsidian 归档中读取）。请仔细学习它们的：
+- 行文节奏：短段落、短句子、口播感
+- 语气口吻：懂行不装、亲切自然的行家腔调
+- 句式偏好：设问、口语化插入语、过渡词的使用方式
+- 论证方式：如何引入数据、如何讲匠人故事、如何做类比
+- 整体气质：科学依据 + 文化底蕴 + 理性消费观
+
+${examples}
+
+⚠️ 强制要求：新文章的风格、口吻、节奏必须与以上示例保持一致。如果你觉得自己的输出和示例风格不匹配，请重写。`;
+      }
+    }
+    // 回退：用 localStorage 中的历史文章
+    const fallback = this.getFewShotArticles();
+    return fallback ? `【参考示例（模仿其文风和结构）】\n${fallback}\n` : '';
+  },
+
+  /** 渲染知识库管理界面（在设置面板中使用） */
+  renderObsidianKB() {
+    const statuses = ObsidianKB.getFolderStatuses();
+    const total = ObsidianKB.getTotalArticles();
+
+    let html = '<div class="obsidian-kb-section">';
+
+    // 已连接的文件夹列表
+    if (statuses.length > 0) {
+      html += '<div class="kb-folder-list">';
+      statuses.forEach((f, i) => {
+        html += `
+          <div class="kb-folder-item ${f.error ? 'kb-error' : ''}">
+            <span class="kb-folder-icon">📁</span>
+            <span class="kb-folder-name">${f.name}</span>
+            <span class="kb-folder-count">${f.count} 篇文章</span>
+            ${f.error ? `<span class="kb-folder-error">${f.error}</span>` : ''}
+            <button class="btn btn-sm btn-danger" onclick="App._removeKBFolder(${i})" title="移除">✕</button>
+          </div>
+        `;
+      });
+      html += '</div>';
+      html += `<p class="kb-summary">📊 共 ${statuses.length} 个文件夹 · ${total} 篇文章</p>`;
+    } else {
+      html += '<p class="text-light">尚未连接知识库文件夹</p>';
+    }
+
+    // 按钮
+    html += `
+      <div class="kb-actions">
+        <button class="btn btn-secondary btn-sm" onclick="App._addKBFolder()">📂 添加文件夹</button>
+        ${statuses.length > 0 ? `<button class="btn btn-secondary btn-sm" onclick="App._rescanKB()">🔄 重新扫描</button>` : ''}
+      </div>
+      <p class="text-light" style="margin-top:8px;font-size:12px;">
+        💡 支持添加多个文件夹。需要 Chrome/Edge 浏览器。选一次后会记住权限。
+      </p>
+    `;
+
+    html += '</div>';
+    return html;
+  },
+
+  /** 添加知识库文件夹 */
+  async _addKBFolder() {
+    try {
+      const result = await ObsidianKB.addFolder();
+      this.showStatus(`✅ 已添加「${result.name}」，${result.count} 篇文章`, 'success');
+      this.renderSettings();
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        this.showStatus('❌ ' + e.message, 'error');
+      }
+    }
+  },
+
+  /** 移除知识库文件夹 */
+  async _removeKBFolder(index) {
+    await ObsidianKB.removeFolder(index);
+    this.renderSettings();
+  },
+
+  /** 重新扫描所有知识库文件夹 */
+  async _rescanKB() {
+    this.showStatus('🔄 正在扫描知识库...', 'info');
+    await ObsidianKB.rescanAll();
+    const total = ObsidianKB.getTotalArticles();
+    this.showStatus(`✅ 扫描完成，共 ${total} 篇文章`, 'success');
+    this.renderSettings();
   },
 
   async generateArticle() {
@@ -1803,6 +1915,17 @@ ${existingText}
       await writable.write(content);
       await writable.close();
       this.showStatus(`✅ 已保存到 Obsidian: ${filename}`, 'success');
+      // 自动加入知识库（如果该文件夹在知识库中）
+      if (typeof ObsidianKB !== 'undefined') {
+        const added = ObsidianKB.addExternalArticle(dirHandle.name, {
+          title,
+          category: this.state.currentCategory || '未分类',
+          content
+        });
+        if (added) {
+          console.log(`[ObsidianKB] 已自动加入知识库: ${title}`);
+        }
+      }
     } catch (e) {
       this.showStatus('❌ 保存失败：' + e.message, 'error');
     }
@@ -1838,6 +1961,12 @@ ${existingText}
         <p class="text-light">用于图片识别，默认调本地 http://127.0.0.1:8000</p>
         ${this.renderConfigCards(configs.filter(c => c.type === 'vision'), 'vision')}
         <button class="btn btn-secondary btn-sm" onclick="App.addConfig('vision')">➕ 添加视觉配置</button>
+      </div>
+
+      <div class="settings-section">
+        <h3>📖 Obsidian 知识库</h3>
+        <p class="text-light">连接 Obsidian 文件夹，自动读取归档文章作为写作参考（替代硬编码的「已写方向」）</p>
+        ${this.renderObsidianKB()}
       </div>
 
       <div class="settings-section">
