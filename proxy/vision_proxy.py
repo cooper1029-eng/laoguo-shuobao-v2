@@ -63,15 +63,17 @@ class VisionProxyHandler(http.server.BaseHTTPRequestHandler):
             self._json(400, {"error": "缺少 image 字段"})
             return
 
+        context = data.get("context", "")
+
         # 提取纯 base64
         raw_b64 = image_data_url.split(",", 1)[1] if "," in image_data_url else image_data_url
 
-        # 日志：打印图片大小
         img_size = len(raw_b64)
-        print(f"[代理] 收到图片: {img_size} bytes base64 (~{img_size * 3 // 4} bytes raw)", flush=True)
+        print(f"[代理] 收到图片: {img_size} bytes base64 (~{img_size * 3 // 4} bytes raw)" +
+              (f" | 背景: {context[:50]}..." if context else ""), flush=True)
 
         try:
-            result = self._call_omlx(raw_b64)
+            result = self._call_omlx(raw_b64, context)
             self._json(200, {"text": result})
         except urllib.error.HTTPError as e:
             err_body = e.read().decode()
@@ -79,14 +81,18 @@ class VisionProxyHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             self._json(500, {"error": str(e)})
 
-    def _call_omlx(self, image_b64: str) -> str:
-        """调用 oMLX 视觉 API，和 recognize.py 一样的方式"""
+    def _call_omlx(self, image_b64: str, context: str = "") -> str:
+        """调用 oMLX 视觉 API"""
+        system_text = SYSTEM_PROMPT
+        if context:
+            system_text += f"\n\n用户提供了以下背景信息，识图时请重点观察与之相关的细节：\n{context}"
+
         payload = json.dumps({
             "model": OMLX_MODEL,
             "messages": [{
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": SYSTEM_PROMPT},
+                    {"type": "text", "text": system_text},
                     {"type": "image_url", "image_url": {"url": f"data:image/{'jpeg' if image_b64.startswith('/9j/') else 'png'};base64,{image_b64}"}},
                 ],
             }],

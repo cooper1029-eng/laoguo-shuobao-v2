@@ -84,7 +84,7 @@ const Vision = {
   },
 
   /** 调用本地视觉 API（通过 Python 代理转发，和 recognize.py 一样可靠） */
-  async recognizeLocal(imageUrls, onProgress) {
+  async recognizeLocal(imageUrls, onProgress, context) {
     if (!imageUrls || imageUrls.length === 0) {
       throw new VisionError('no_image', '请先上传图片');
     }
@@ -94,10 +94,13 @@ const Vision = {
     // 只传纯 base64 数据，不传 "data:image/png;base64," 前缀
     const rawBase64 = imageUrls[0].split(',')[1] || imageUrls[0];
     const proxyUrl = 'http://127.0.0.1:8765/v1/vision';
+    const body = { image: rawBase64 };
+    if (context) body.context = context;
+
     const response = await fetch(proxyUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: rawBase64 })
+      body: JSON.stringify(body)
     });
 
     if (!response.ok) {
@@ -115,12 +118,12 @@ const Vision = {
   },
 
   /** 调用云端 LLM 视觉（如 GPT-4o、Claude 等支持图片的模型） */
-  async recognizeCloud(imageUrls, onProgress, configOverride) {
+  async recognizeCloud(imageUrls, onProgress, configOverride, context) {
     const config = configOverride || Config.getDefault('llm');
     if (!config) throw new VisionError('no_config', '未配置 LLM API');
 
     const systemPrompt = `你是建水紫陶鉴定专家。用中文描述图片中的紫陶器物。
-
+${context ? `\n用户提供了以下背景信息，识图时请重点观察与之相关的细节：\n${context}\n` : ''}
 按以下格式输出：
 1. **器物类型**：
 2. **整体外观**：
@@ -131,11 +134,14 @@ const Vision = {
 
     const content = [];
     imageUrls.forEach(url => {
-      // 确保图片为 data URL 格式（云端视觉 API 需要完整前缀）
       const imgUrl = url.startsWith('data:') ? url : `data:image/png;base64,${url}`;
       content.push({ type: 'image_url', image_url: { url: imgUrl } });
     });
-    content.push({ type: 'text', text: '请描述这张紫陶器物的特征。' });
+
+    const userText = context
+      ? `请根据用户的背景信息，重点描述这张紫陶器物的相关特征。`
+      : `请描述这张紫陶器物的特征。`;
+    content.push({ type: 'text', text: userText });
 
     const messages = [
       { role: 'system', content: systemPrompt },
@@ -183,14 +189,12 @@ const Vision = {
   },
 
   /** 主要识图入口：优先用配置的视觉 API，其次走本地代理 */
-  async recognize(imageUrls, onProgress) {
-    // 检查是否有配置的视觉 API（如小米 mimo）
+  async recognize(imageUrls, onProgress, context) {
     const visionConfig = Config.getDefault('vision');
     if (visionConfig && visionConfig.baseUrl) {
-      return await this.recognizeCloud(imageUrls, onProgress, visionConfig);
+      return await this.recognizeCloud(imageUrls, onProgress, visionConfig, context);
     }
-    // 回退到本地视觉代理
-    return await this.recognizeLocal(imageUrls, onProgress);
+    return await this.recognizeLocal(imageUrls, onProgress, context);
   },
 
   /** 将图片文件转为压缩后的 base64 数组 */
