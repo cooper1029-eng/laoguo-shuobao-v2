@@ -136,12 +136,12 @@ const Config = {
       isDefault: true
     },
     {
-      id: 'local-vision',
-      name: '本地视觉',
+      id: 'xiaomi-mimo',
+      name: '小米 mimo 识图',
       type: 'vision',
-      baseUrl: 'http://127.0.0.1:8000',
-      model: 'Qwen3.5-4B-MLX-4bit',
-      key: '123456',    // oMLX 默认 API Key，可在设置中修改
+      baseUrl: 'https://api.xiaomimimo.com/v1/chat/completions',
+      model: 'mimo-v2.5',
+      key: '',
       isDefault: true
     }
   ],

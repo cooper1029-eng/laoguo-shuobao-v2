@@ -48,16 +48,16 @@ const App = {
     this.loadDraft(); // 恢复上一次的工作进度
     // 初始化 Obsidian 知识库（异步，不影响界面渲染）
     ObsidianKB.init().then(() => {
-      // 如果有文章，在状态栏显示提示
       if (ObsidianKB.hasArticles()) {
         this.showStatus('📖 知识库已加载：' + ObsidianKB.getStatus(), 'success');
       }
-      // 更新设置面板中的知识库状态（如果已打开）
       const panel = document.getElementById('settingsPanel');
       if (panel && !panel.classList.contains('hidden')) {
         this.renderSettings();
       }
     });
+    // 从 GitHub 加载 covered 列表（手机端同步用）
+    ObsidianKB.initFromGitHub();
   },
 
   // ====================== UI 骨架 ======================
@@ -771,12 +771,19 @@ ${this._buildExamplesSection()}
 请直接输出正文。`;
   },
 
-  /** 构建「已写方向」段落：优先用 Obsidian 知识库，回退到硬编码 */
+  /** 构建「已写方向」段落：Obsidian 本地 > GitHub > 硬编码 */
   _buildCoveredSection() {
+    // 优先：本地 Obsidian 文件夹扫描（桌面端）
     if (ObsidianKB.hasArticles()) {
       const covered = ObsidianKB.buildCoveredList();
       return `【已写过的方向（基于 Obsidian 归档，避免重复）】\n${covered}`;
     }
+    // 其次：GitHub 上的 covered 列表（手机端同步）
+    const ghCovered = ObsidianKB.getGitHubCovered();
+    if (ghCovered) {
+      return `【已写过的方向（基于 Obsidian 归档，避免重复）】\n${ghCovered}`;
+    }
+    // 兜底：硬编码
     return `【已写过的方向（避免重复）】\n${Config.KNOWLEDGE_BASE.covered}`;
   },
 
@@ -1947,6 +1954,7 @@ ${existingText}
   renderSettings() {
     const body = document.getElementById('settingsBody');
     const configs = Config.loadAll();
+    const ghConfig = ObsidianKB._getGitHubConfig() || {};
 
     body.innerHTML = `
       <div class="settings-section">
@@ -1958,22 +1966,54 @@ ${existingText}
 
       <div class="settings-section">
         <h3>👁️ 视觉 API 配置</h3>
-        <p class="text-light">用于图片识别，默认调本地 http://127.0.0.1:8000</p>
+        <p class="text-light">用于图片识别，支持云端视觉模型（如小米 mimo）</p>
         ${this.renderConfigCards(configs.filter(c => c.type === 'vision'), 'vision')}
         <button class="btn btn-secondary btn-sm" onclick="App.addConfig('vision')">➕ 添加视觉配置</button>
       </div>
 
       <div class="settings-section">
         <h3>📖 Obsidian 知识库</h3>
-        <p class="text-light">连接 Obsidian 文件夹，自动读取归档文章作为写作参考（替代硬编码的「已写方向」）</p>
+        <p class="text-light">连接 Obsidian 文件夹，自动读取归档文章作为写作参考</p>
         ${this.renderObsidianKB()}
+
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-light)">
+          <h4 style="font-size:0.9em;margin-bottom:8px">☁️ GitHub 同步（手机端用）</h4>
+          <p class="text-light" style="font-size:0.82em;margin-bottom:8px">配置后，手机端可通过 GitHub 读写知识库，与电脑端同步</p>
+          <div class="config-field">
+            <label>GitHub Token</label>
+            <input type="password" id="ghToken" value="${ghConfig.token || ''}"
+              placeholder="ghp_xxx（需要 repo 权限）"
+              onchange="App.saveGitHubField('token', this.value)">
+          </div>
+          <div class="config-field">
+            <label>仓库（owner/repo）</label>
+            <input type="text" id="ghRepo" value="${ghConfig.repo || ''}"
+              placeholder="如：guoxiang/obsidian-vault"
+              onchange="App.saveGitHubField('repo', this.value)">
+          </div>
+          <div class="config-field">
+            <label>文件路径</label>
+            <input type="text" id="ghPath" value="${ghConfig.path || ''}"
+              placeholder="如：工作/老郭说宝/kb-covered.md"
+              onchange="App.saveGitHubField('path', this.value)">
+          </div>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn btn-sm btn-primary" onclick="App.testGitHubSync()">🔗 测试连接</button>
+            ${ghConfig.token ? '<button class="btn btn-sm btn-danger" onclick="App.clearGitHubSync()">清除配置</button>' : ''}
+          </div>
+        </div>
       </div>
 
       <div class="settings-section">
         <h3>🔧 故障排查</h3>
-        <p class="text-light">如果本地 API 因 CORS 无法调用，试试用 HTTP 服务器打开页面：</p>
         <pre class="code-block">cd 老郭网页版V2 && python3 -m http.server 8080</pre>
         <p class="text-light">然后在浏览器打开 <code>http://localhost:8080</code></p>
+      </div>
+
+      <div class="settings-section" style="border-top:1px solid var(--border-light);padding-top:12px">
+        <p class="text-light" style="font-size:0.8em;text-align:center">
+          API Key 仅存储在当前设备，换设备需重新配置
+        </p>
       </div>
     `;
   },
@@ -2044,6 +2084,50 @@ ${existingText}
     if (!confirm('确定删除这个配置？')) return;
     Config.remove(id);
     this.renderSettings();
+  },
+
+  // ====================== GitHub 同步 ======================
+
+  _ghDraft: {},
+
+  saveGitHubField(field, value) {
+    this._ghDraft[field] = value;
+    const cfg = { ...this._ghDraft };
+    if (cfg.token || cfg.repo) {
+      ObsidianKB.saveGitHubConfig(cfg);
+    }
+  },
+
+  async testGitHubSync() {
+    // 先保存当前输入
+    ['token', 'repo', 'path'].forEach(f => {
+      const el = document.getElementById('gh' + f.charAt(0).toUpperCase() + f.slice(1));
+      if (el) this._ghDraft[f] = el.value.trim();
+    });
+    const cfg = this._ghDraft;
+    if (!cfg.token || !cfg.repo) {
+      this.showStatus('❌ 请填写 GitHub Token 和仓库名', 'error');
+      return;
+    }
+    ObsidianKB.saveGitHubConfig(cfg);
+    try {
+      const data = await ObsidianKB.loadFromGitHub();
+      if (data) {
+        this.showStatus(`✅ 连接成功！已读取 ${data.content.split('\n').filter(l => l.startsWith('- ')).length} 条记录`, 'success');
+      } else {
+        this.showStatus('✅ 连接成功！文件尚不存在，保存文章时会自动创建', 'success');
+      }
+    } catch (e) {
+      this.showStatus('❌ 连接失败：' + e.message, 'error');
+    }
+  },
+
+  clearGitHubSync() {
+    if (!confirm('确定清除 GitHub 同步配置？')) return;
+    ObsidianKB.clearGitHubConfig();
+    this._ghDraft = {};
+    this.renderSettings();
+    this.showStatus('✅ GitHub 同步配置已清除', 'success');
   },
 
   // ====================== 工具函数 ======================
@@ -2210,6 +2294,10 @@ ${existingText}
     history.unshift(record);
     if (history.length > 50) history = history.slice(0, 50);
     localStorage.setItem('laoguo_v2_history', JSON.stringify(history));
+
+    // 自动同步标题到 Obsidian（GitHub）
+    const category = Topics.categoryLabel(this.state.currentCategory || 'knowledge');
+    ObsidianKB.appendTitleToGitHub(title, category).catch(() => {});
   },
 
   /** 渲染历史记录列表 */

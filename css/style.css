@@ -1318,6 +1318,44 @@ body {
   .header-top button { margin-left: 0 !important; }
 }
 
+/* ===== 窄屏手机适配 ===== */
+@media (max-width: 480px) {
+  /* 底部操作栏固定 */
+  .step-footer {
+    position: sticky;
+    bottom: 0;
+    background: var(--bg);
+    z-index: 10;
+    padding: 12px 0;
+    border-top: 1px solid var(--border-light);
+  }
+
+  /* 修改模式选择器竖排 */
+  .rewrite-mode-selector { flex-direction: column; }
+
+  /* 防止 iOS 输入框自动缩放 */
+  input, textarea, select { font-size: 16px !important; }
+
+  /* 按钮最小触摸区域 */
+  .btn { min-height: 44px; }
+  .btn-sm { min-height: 36px; }
+
+  /* 步骤条极窄屏只显示图标 */
+  .step-label { display: none; }
+  .step-circle { width: 34px; height: 34px; }
+  .step-connector { width: 12px; }
+
+  /* 生成配置竖排 */
+  .gen-config { flex-direction: column; }
+
+  /* 文章预览框优化 */
+  .article-preview-box { max-height: 50vh; font-size: 0.88em; }
+
+  /* 导出摘要紧凑 */
+  .export-summary { font-size: 0.85em; }
+  .summary-item { flex-direction: column; gap: 2px; }
+}
+
 /* ===== Obsidian 知识库设置面板 ===== */
 .obsidian-kb-section {
   padding: 4px 0;

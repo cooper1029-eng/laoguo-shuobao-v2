@@ -1,0 +1,24 @@
+{
+  "name": "老郭说宝 · 文章创作工作台",
+  "short_name": "老郭说宝",
+  "description": "专注建水紫陶 · 7步出文 · AI驱动选题",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#FDF5E6",
+  "theme_color": "#8B5E3C",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

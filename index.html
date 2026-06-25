@@ -2,12 +2,17 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>老郭说宝 — 创作工作台</title>
+  <meta name="theme-color" content="#8B5E3C">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="老郭说宝">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
   <link rel="stylesheet" href="css/style.css?v=fd1bc53">
 </head>
 <body>
-  <!-- app.js 的 render() 会生成全部界面，这里只需要挂载点 -->
   <div id="app"></div>
 
   <script src="js/config.js?v=fd1bc53"></script>
@@ -16,5 +21,10 @@
   <script src="js/topics.js?v=fd1bc53"></script>
   <script src="js/obsidian-kb.js?v=fd1bc53"></script>
   <script src="js/app.js?v=fd1bc53"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    }
+  </script>
 </body>
 </html>

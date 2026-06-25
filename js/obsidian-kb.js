@@ -340,5 +340,140 @@ const ObsidianKB = {
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
+  },
+
+  // ==================== GitHub API 同步（手机端） ====================
+
+  /** 获取 GitHub 同步配置 */
+  _getGitHubConfig() {
+    try {
+      const raw = localStorage.getItem('laoguo_github_sync');
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  },
+
+  /** 保存 GitHub 同步配置 */
+  saveGitHubConfig(config) {
+    localStorage.setItem('laoguo_github_sync', JSON.stringify(config));
+  },
+
+  /** 清除 GitHub 同步配置 */
+  clearGitHubConfig() {
+    localStorage.removeItem('laoguo_github_sync');
+  },
+
+  /** 从 GitHub 读取 covered 列表 */
+  async loadFromGitHub() {
+    const cfg = this._getGitHubConfig();
+    if (!cfg || !cfg.token || !cfg.repo || !cfg.path) return null;
+
+    const url = `https://api.github.com/repos/${cfg.repo}/contents/${cfg.path}`;
+    const resp = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${cfg.token}`, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    if (!resp.ok) {
+      if (resp.status === 404) return null; // 文件不存在，首次使用
+      throw new Error(`GitHub API ${resp.status}`);
+    }
+    const data = await resp.json();
+    const content = decodeURIComponent(escape(atob(data.content)));
+    return { content, sha: data.sha };
+  },
+
+  /** 写入 covered 列表到 GitHub */
+  async saveToGitHub(content, existingSha) {
+    const cfg = this._getGitHubConfig();
+    if (!cfg || !cfg.token || !cfg.repo || !cfg.path) return;
+
+    const body = {
+      message: `更新知识库 covered 列表 (${new Date().toISOString().split('T')[0]})`,
+      content: btoa(unescape(encodeURIComponent(content)))
+    };
+    if (existingSha) body.sha = existingSha;
+
+    const url = `https://api.github.com/repos/${cfg.repo}/contents/${cfg.path}`;
+    const resp = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${cfg.token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/vnd.github.v3+json'
+      },
+      body: JSON.stringify(body)
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.message || `GitHub API ${resp.status}`);
+    }
+    return await resp.json();
+  },
+
+  /** 追加文章标题到 covered 列表并同步到 GitHub */
+  async appendTitleToGitHub(title, category) {
+    const cfg = this._getGitHubConfig();
+    if (!cfg || !cfg.token) return;
+
+    try {
+      let existing = await this.loadFromGitHub();
+      let content = existing ? existing.content : this._buildDefaultCoveredMd();
+      let sha = existing ? existing.sha : null;
+
+      // 解析现有内容，追加标题
+      const catHeader = `## ${category || '未分类'}`;
+      const lines = content.split('\n');
+      let found = false;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim() === catHeader) {
+          // 在分类标题后插入（找到下一个 ## 或文件末尾）
+          let insertAt = i + 1;
+          while (insertAt < lines.length && !lines[insertAt].startsWith('## ')) insertAt++;
+          lines.splice(insertAt, 0, `- ${title}`);
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        // 没有这个分类，追加到末尾
+        lines.push('', catHeader, `- ${title}`);
+      }
+
+      const newContent = lines.join('\n');
+      await this.saveToGitHub(newContent, sha);
+      console.log(`[ObsidianKB] 已同步标题到 GitHub: ${title}`);
+    } catch (e) {
+      console.warn('[ObsidianKB] GitHub 同步失败:', e.message);
+    }
+  },
+
+  /** 启动时从 GitHub 加载 covered 列表（手机端） */
+  async initFromGitHub() {
+    const cfg = this._getGitHubConfig();
+    if (!cfg || !cfg.token) return;
+
+    try {
+      const data = await this.loadFromGitHub();
+      if (data && data.content) {
+        this._githubCovered = data.content;
+        console.log('[ObsidianKB] 已从 GitHub 加载 covered 列表');
+      }
+    } catch (e) {
+      console.warn('[ObsidianKB] GitHub 加载失败:', e.message);
+    }
+  },
+
+  /** 获取 GitHub 上的 covered 列表（用于 buildCoveredList） */
+  getGitHubCovered() {
+    return this._githubCovered || null;
+  },
+
+  /** 构建默认的 covered markdown 模板 */
+  _buildDefaultCoveredMd() {
+    return `## 作品赏析类
+## 工艺科普类
+## 科普辟谣
+## 紫陶vs紫砂
+## 文化历史
+## 行业评论
+## 实用指南`;
   }
 };
