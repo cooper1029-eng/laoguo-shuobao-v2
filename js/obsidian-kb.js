@@ -16,18 +16,21 @@ const ObsidianKB = {
 
   /** 应用启动时调用：恢复已存储的文件夹句柄并重新扫描 */
   async init() {
+    // 手机浏览器不支持 File System Access API，跳过本地文件夹扫描
+    if (!window.showDirectoryPicker) return;
+
     try {
       const handles = await this._loadHandlesFromDB();
       if (handles.length === 0) return;
 
       for (const handle of handles) {
         try {
-          // 请求读取权限（用户可能需要重新授权）
           const opts = { mode: 'read' };
-          const perm = await handle.queryPermission(opts);
+          let perm;
+          try { perm = await handle.queryPermission(opts); } catch { perm = 'denied'; }
           if (perm !== 'granted') {
-            const result = await handle.requestPermission(opts);
-            if (result !== 'granted') {
+            try { perm = await handle.requestPermission(opts); } catch { perm = 'denied'; }
+            if (perm !== 'granted') {
               this.folders.push({ name: handle.name, handle, articles: [], error: '⚠️ 未授予读取权限' });
               continue;
             }
@@ -40,7 +43,7 @@ const ObsidianKB = {
       }
       console.log(`[ObsidianKB] 已恢复 ${this.folders.length} 个文件夹，共 ${this.getTotalArticles()} 篇文章`);
     } catch (e) {
-      console.warn('[ObsidianKB] 初始化失败（首次使用或浏览器不支持）：', e.message);
+      console.warn('[ObsidianKB] 初始化失败：', e.message);
     }
   },
 
