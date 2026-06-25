@@ -541,9 +541,10 @@ const App = {
     document.getElementById('visionLoading').classList.remove('hidden');
     document.getElementById('btnVision').disabled = true;
     try {
+      const context = this.state.inspiration || this.state.selectedTopic || '';
       const desc = await Vision.recognize(this.state.images, (msg) => {
         document.getElementById('visionLoadingText').textContent = msg || '正在识别图片...';
-      });
+      }, context);
       // 不管 vision.js 里洗没洗干净，这里再杀一轮
       this.state.imageDesc = Vision.cleanResponse(desc);
       this.renderStep2();
