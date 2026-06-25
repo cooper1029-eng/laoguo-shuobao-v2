@@ -843,6 +843,7 @@ ${examples}
       <div class="kb-actions">
         <button class="btn btn-secondary btn-sm" onclick="App._addKBFolder()">📂 添加文件夹</button>
         ${statuses.length > 0 ? `<button class="btn btn-secondary btn-sm" onclick="App._rescanKB()">🔄 重新扫描</button>` : ''}
+        ${statuses.some(f => f.error) ? `<button class="btn btn-sm btn-danger" onclick="App._clearAllKBFolders()">🗑️ 清除所有</button>` : ''}
       </div>
       <p class="text-light" style="margin-top:8px;font-size:12px;">
         💡 支持添加多个文件夹。需要 Chrome/Edge 浏览器。选一次后会记住权限。
@@ -879,6 +880,14 @@ ${examples}
     const total = ObsidianKB.getTotalArticles();
     this.showStatus(`✅ 扫描完成，共 ${total} 篇文章`, 'success');
     this.renderSettings();
+  },
+
+  async _clearAllKBFolders() {
+    if (!confirm('确定清除所有文件夹？之后需要重新添加。')) return;
+    ObsidianKB.folders = [];
+    await ObsidianKB._saveHandlesToDB();
+    this.renderSettings();
+    this.showStatus('✅ 已清除所有知识库文件夹', 'success');
   },
 
   async generateArticle() {
